@@ -21,6 +21,27 @@ describe('errorMessage', () => {
   it('falls back for a non-axios error', () => {
     expect(errorMessage(new Error('boom'), 'fallback')).toBe('fallback')
   })
+
+  it('translates known backend auth messages to Indonesian', () => {
+    expect(errorMessage(fakeAxiosError({ message: 'Invalid email or password' }), 'fallback')).toBe(
+      'Email atau kata sandi salah',
+    )
+    expect(
+      errorMessage(fakeAxiosError({ message: 'An account with this email already exists' }), 'fallback'),
+    ).toBe('Akun dengan email ini sudah terdaftar')
+    expect(errorMessage(fakeAxiosError({ message: 'Invalid invite code' }), 'fallback')).toBe(
+      'Kode undangan tidak valid',
+    )
+    expect(
+      errorMessage(fakeAxiosError({ message: 'This reset link is invalid or has expired' }), 'fallback'),
+    ).toBe('Tautan reset ini tidak valid atau sudah kedaluwarsa')
+  })
+
+  it('leaves an unrecognized backend message untranslated', () => {
+    expect(errorMessage(fakeAxiosError({ message: 'Some future backend message' }), 'fallback')).toBe(
+      'Some future backend message',
+    )
+  })
 })
 
 describe('fieldErrors', () => {
@@ -31,6 +52,23 @@ describe('fieldErrors', () => {
 
   it('returns an empty object when there are no details', () => {
     expect(fieldErrors(fakeAxiosError({}))).toEqual({})
+  })
+
+  it('translates known backend issue strings to Indonesian', () => {
+    const err = fakeAxiosError({
+      error: {
+        details: [
+          { field: 'email', issue: 'already registered' },
+          { field: 'invite_code', issue: 'not found' },
+        ],
+      },
+    })
+    expect(fieldErrors(err)).toEqual({ email: 'sudah terdaftar', invite_code: 'tidak ditemukan' })
+  })
+
+  it('leaves an unrecognized issue string untranslated', () => {
+    const err = fakeAxiosError({ error: { details: [{ field: 'name', issue: 'Some future issue' }] } })
+    expect(fieldErrors(err)).toEqual({ name: 'Some future issue' })
   })
 })
 

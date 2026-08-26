@@ -171,6 +171,13 @@ describe('response interceptor — error toasts', () => {
     await expect(responseErrorInterceptor()(err)).rejects.toBe(err)
     expect(toast.error).not.toHaveBeenCalled()
   })
+
+  it('does not toast a 409 (e.g. duplicate email) from an auth endpoint without a session — shown inline instead', async () => {
+    const config = fakeConfig({ url: '/auth/register', method: 'post' })
+    const err = fakeAxiosError(409, config, { message: 'An account with this email already exists' })
+    await expect(responseErrorInterceptor()(err)).rejects.toBe(err)
+    expect(toast.error).not.toHaveBeenCalled()
+  })
 })
 
 describe('response interceptor — 401 single-flight refresh + retry', () => {
@@ -310,7 +317,7 @@ describe('response interceptor — 401 single-flight refresh + retry', () => {
     http.defaults.adapter = originalAdapter
   })
 
-  it('toasts a 401 from /auth/login instead of retrying it as a session refresh', async () => {
+  it('does not toast a 401 from /auth/login — the calling view shows it inline instead', async () => {
     const forceLogout = vi.fn()
     registerForceLogout(forceLogout)
     const adapter = vi.fn()
@@ -320,14 +327,14 @@ describe('response interceptor — 401 single-flight refresh + retry', () => {
     const err = fakeAxiosError(401, config, { message: 'Invalid email or password' })
     await expect(responseErrorInterceptor()(err)).rejects.toBe(err)
 
-    expect(toast.error).toHaveBeenCalledWith('Invalid email or password')
+    expect(toast.error).not.toHaveBeenCalled()
     expect(forceLogout).not.toHaveBeenCalled()
     expect(adapter).not.toHaveBeenCalled()
 
     http.defaults.adapter = originalAdapter
   })
 
-  it('toasts a 401 from /auth/register the same way', async () => {
+  it('does not toast a 401 from /auth/register either, and does not retry it as a session refresh', async () => {
     const forceLogout = vi.fn()
     registerForceLogout(forceLogout)
     const adapter = vi.fn()
@@ -337,7 +344,7 @@ describe('response interceptor — 401 single-flight refresh + retry', () => {
     const err = fakeAxiosError(401, config, {})
     await expect(responseErrorInterceptor()(err)).rejects.toBe(err)
 
-    expect(toast.error).toHaveBeenCalledWith('Email atau kata sandi salah.')
+    expect(toast.error).not.toHaveBeenCalled()
     expect(forceLogout).not.toHaveBeenCalled()
     expect(adapter).not.toHaveBeenCalled()
 

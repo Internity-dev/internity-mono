@@ -81,7 +81,10 @@ http.interceptors.response.use(
           return Promise.reject(error)
         }
         if (isAuthEndpointWithoutSession) {
-          toast.error(body?.message ?? 'Email atau kata sandi salah.')
+          // Shown inline by the calling view (wrong password, expired
+          // invite code, etc.) — not toasted, to avoid tripling up with the
+          // inline alert and field caption. See AUTH_ENDPOINTS_WITHOUT_SESSION
+          // above.
           break
         }
         if (!retryConfig || retryConfig._retried || retryConfig.url?.includes('/auth/refresh')) {
@@ -118,7 +121,7 @@ http.interceptors.response.use(
         toast.error('Terjadi kesalahan pada server. Silakan coba lagi.')
         break
       default:
-        if (body?.message) toast.error(body.message)
+        if (body?.message && !isAuthEndpointWithoutSession) toast.error(body.message)
     }
     return Promise.reject(error)
   },
