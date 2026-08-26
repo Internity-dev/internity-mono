@@ -21,6 +21,7 @@ import (
 	"internity/internal/modules/scoring"
 	"internity/internal/modules/vacancy"
 	"internity/internal/platform/logger"
+	"internity/internal/platform/otel"
 	"internity/internal/platform/postgres"
 	"internity/internal/platform/queue"
 	"internity/internal/platform/redisx"
@@ -192,6 +193,11 @@ func main() {
 
 	logger.Init(cfg.Env)
 
+	shutdownTracing, err := otel.Init(context.Background(), "internity-api", cfg.OTelExporterEndpoint)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to init opentelemetry")
+	}
+
 	db, err := postgres.Open(cfg.DatabaseURL, cfg.Env == "development")
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to postgres")
@@ -214,13 +220,13 @@ func main() {
 	enqueuer := queue.NewEnqueuer(redisConnOpt)
 	defer enqueuer.Close()
 
-	identityRepo := identity.NewRepository(db)
-	identitySvc := identity.NewService(identityRepo, queueMailerAdapter{enqueuer: enqueuer}, identity.DefaultConfig(), storageClient)
-	identityHandler := identity.NewHandler(identitySvc, cfg.CookieSecure)
-
 	orgsRepo := orgs.NewRepository(db)
 	orgsSvc := orgs.NewService(orgsRepo)
 	orgsHandler := orgs.NewHandler(orgsSvc)
+
+	identityRepo := identity.NewRepository(db)
+	identitySvc := identity.NewService(identityRepo, queueMailerAdapter{enqueuer: enqueuer}, identity.DefaultConfig(), storageClient, companyScopeAdapter{repo: orgsRepo})
+	identityHandler := identity.NewHandler(identitySvc, cfg.CookieSecure)
 
 	notificationRepo := notification.NewRepository(db)
 	notificationSvc := notification.NewService(notificationRepo)
@@ -285,5 +291,8 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Error().Err(err).Msg("graceful shutdown failed")
+	}
+	if err := shutdownTracing(ctx); err != nil {
+		log.Error().Err(err).Msg("opentelemetry shutdown failed")
 	}
 }

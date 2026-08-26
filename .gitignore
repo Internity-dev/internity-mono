@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+!.env.prod.example
+!.env.dokploy.example
 
 # Take-home instructions PDF (not part of the submission source)
 Take Home Test Fullstack - PT Mumtaz Teknologi Indonesia.pdf

@@ -55,3 +55,16 @@ export interface User {
   is_active: boolean
   created_at: string
 }
+
+// POST /users — admin creates a coordinator or mentor account (never
+// student or admin through this path; students self-register via an invite
+// code, and creating another admin isn't a supported flow).
+export interface CreateStaffAccountInput {
+  name: string
+  email: string
+  password: string
+  password_confirmation: string
+  role: 'coordinator' | 'mentor'
+  school_id?: number
+  company_id?: number
+}

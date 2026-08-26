@@ -6,17 +6,18 @@ import { z } from 'zod'
 import { useQuery, useMutation } from '@tanstack/vue-query'
 import { isAxiosError } from 'axios'
 import { toast } from 'vue-sonner'
-import { CopyIcon, TicketIcon, AlertCircleIcon } from '@lucide/vue'
+import { CopyIcon, TicketIcon, AlertCircleIcon, UserPlusIcon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useListQuery } from '@/composables/useListQuery'
 import { useAuthStore } from '@/stores/auth'
-import type { ApiSuccess, ApiErrorBody, User, Role } from '@/types/api'
+import type { ApiSuccess, ApiErrorBody, User, Role, CreateStaffAccountInput } from '@/types/api'
 import type { School, Department, Course, Company, InviteCode, InviteCodeInput } from '@/types/orgs'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable from '@/components/shared/DataTable.vue'
 import ListToolbar from '@/components/shared/ListToolbar.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PasswordInput from '@/components/shared/PasswordInput.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
@@ -240,6 +241,114 @@ const onSubmit = handleSubmit(async (values) => {
   }
 })
 
+// --- create staff account form ---
+//
+// Coordinator role is only ever offered when the actor is admin — a
+// coordinator creating another coordinator isn't a supported flow (see
+// identity.Service.CreateStaffAccount's own comment for why). Mentor is
+// offered to both: admin picks any company, a coordinator's own school is
+// enforced server-side against the department→company cascade below.
+
+const staffSchema = toTypedSchema(
+  z
+    .object({
+      name: z.string().min(2, 'Enter a name').max(255),
+      email: z.string().min(1, 'Email is required').email('Enter a valid email'),
+      password: z.string().min(8, 'At least 8 characters').max(72),
+      password_confirmation: z.string().min(1, 'Confirm the password'),
+      role: z.enum(['coordinator', 'mentor']),
+      school_id: z.string().optional(),
+      department_id: z.string().optional(),
+      company_id: z.string().optional(),
+    })
+    .refine((v) => v.password === v.password_confirmation, {
+      message: 'Passwords do not match',
+      path: ['password_confirmation'],
+    })
+    .refine((v) => v.role !== 'coordinator' || !!v.school_id, {
+      message: 'Select a school',
+      path: ['school_id'],
+    })
+    .refine((v) => v.role !== 'mentor' || !!v.company_id, {
+      message: 'Select a company',
+      path: ['company_id'],
+    }),
+)
+
+const staffForm = useForm({
+  validationSchema: staffSchema,
+  initialValues: { name: '', email: '', password: '', password_confirmation: '', role: 'mentor', school_id: '', department_id: '', company_id: '' },
+})
+const [staffName, staffNameAttrs] = staffForm.defineField('name')
+const [staffEmail, staffEmailAttrs] = staffForm.defineField('email')
+const [staffPassword, staffPasswordAttrs] = staffForm.defineField('password')
+const [staffPasswordConfirmation, staffPasswordConfirmationAttrs] = staffForm.defineField('password_confirmation')
+const [staffRole, staffRoleAttrs] = staffForm.defineField('role')
+const [staffSchoolId, staffSchoolIdAttrs] = staffForm.defineField('school_id')
+const [staffDepartmentId, staffDepartmentIdAttrs] = staffForm.defineField('department_id')
+const [staffCompanyId, staffCompanyIdAttrs] = staffForm.defineField('company_id')
+
+// Resetting the whole scope side whenever role or department changes: a
+// stale school/department/company from a previous selection must never
+// survive a role switch (nothing stops a coordinator-shaped payload from
+// being submitted with a leftover company_id otherwise) or a department
+// change (the same "stale child of a changed parent" bug the invite-code
+// form's own department→course cascade already guards against above).
+watch(staffRole, () => {
+  staffForm.setFieldValue('school_id', '')
+  staffForm.setFieldValue('department_id', '')
+  staffForm.setFieldValue('company_id', '')
+})
+watch(staffDepartmentId, () => {
+  staffForm.setFieldValue('company_id', '')
+})
+
+const staffCompaniesPicker = useQuery({
+  queryKey: ['staff-companies-picker', staffDepartmentId],
+  queryFn: async () => {
+    const res = await http.get<ApiSuccess<Company[]>>('/companies', {
+      params: { department_id: Number(staffDepartmentId.value), limit: 100, sort: 'name', order: 'asc' },
+    })
+    return res.data.data
+  },
+  enabled: () => !!staffDepartmentId.value,
+})
+
+const createStaffMutation = useMutation({
+  mutationFn: (payload: CreateStaffAccountInput) => http.post<ApiSuccess<User>>('/users', payload),
+  onSuccess: () => {
+    toast.success('Account created')
+    refetchUsers()
+    staffForm.resetForm()
+  },
+  onError: (err: unknown) => {
+    const fields = fieldErrors(err)
+    if (Object.keys(fields).length) staffForm.setErrors(fields)
+    toast.error(errorMessage(err, 'Failed to create account'))
+  },
+})
+
+const isStaffSubmitting = ref(false)
+
+const onStaffSubmit = staffForm.handleSubmit(async (values) => {
+  isStaffSubmitting.value = true
+  try {
+    await createStaffMutation.mutateAsync({
+      name: values.name,
+      email: values.email,
+      password: values.password,
+      password_confirmation: values.password_confirmation,
+      role: values.role as 'coordinator' | 'mentor',
+      school_id: values.role === 'coordinator' ? Number(values.school_id) : undefined,
+      company_id: values.role === 'mentor' ? Number(values.company_id) : undefined,
+    })
+  } catch {
+    // handled in mutation onError
+  } finally {
+    isStaffSubmitting.value = false
+  }
+})
+
 async function copyCode(code: string) {
   try {
     await navigator.clipboard.writeText(code)
@@ -381,6 +490,116 @@ function formatDate(value: string) {
             </Button>
           </div>
         </div>
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle class="flex items-center gap-2">
+          <UserPlusIcon class="size-4" />
+          Create staff account
+        </CardTitle>
+        <CardDescription>
+          {{ isAdmin ? 'Add a coordinator or mentor account directly.' : 'Add a mentor account for a company in your school.' }}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form class="space-y-4" novalidate @submit="onStaffSubmit">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="space-y-1.5">
+              <label for="staff-name" class="text-sm font-medium">Name</label>
+              <Input id="staff-name" v-model="staffName" v-bind="staffNameAttrs" />
+              <p v-if="staffForm.errors.value.name" class="text-sm text-destructive">{{ staffForm.errors.value.name }}</p>
+            </div>
+            <div class="space-y-1.5">
+              <label for="staff-email" class="text-sm font-medium">Email</label>
+              <Input id="staff-email" v-model="staffEmail" v-bind="staffEmailAttrs" type="email" />
+              <p v-if="staffForm.errors.value.email" class="text-sm text-destructive">{{ staffForm.errors.value.email }}</p>
+            </div>
+          </div>
+
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div class="space-y-1.5">
+              <label for="staff-password" class="text-sm font-medium">Initial password</label>
+              <PasswordInput id="staff-password" v-model="staffPassword" v-bind="staffPasswordAttrs" autocomplete="new-password" />
+              <p v-if="staffForm.errors.value.password" class="text-sm text-destructive">{{ staffForm.errors.value.password }}</p>
+            </div>
+            <div class="space-y-1.5">
+              <label for="staff-password-confirmation" class="text-sm font-medium">Confirm password</label>
+              <PasswordInput
+                id="staff-password-confirmation"
+                v-model="staffPasswordConfirmation"
+                v-bind="staffPasswordConfirmationAttrs"
+                autocomplete="new-password"
+              />
+              <p v-if="staffForm.errors.value.password_confirmation" class="text-sm text-destructive">
+                {{ staffForm.errors.value.password_confirmation }}
+              </p>
+            </div>
+          </div>
+
+          <div class="space-y-1.5">
+            <label for="staff-role" class="text-sm font-medium">Role</label>
+            <Select v-model="staffRole" v-bind="staffRoleAttrs">
+              <SelectTrigger id="staff-role" class="w-full sm:w-60">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-if="isAdmin" value="coordinator">Coordinator</SelectItem>
+                <SelectItem value="mentor">Mentor</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div v-if="staffRole === 'coordinator'" class="space-y-1.5">
+            <label for="staff-school" class="text-sm font-medium">School</label>
+            <Select v-model="staffSchoolId" v-bind="staffSchoolIdAttrs">
+              <SelectTrigger id="staff-school" class="w-full sm:w-80">
+                <SelectValue placeholder="Select a school" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="s in schoolsPicker.data.value" :key="s.id" :value="String(s.id)">{{ s.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p v-if="staffForm.errors.value.school_id" class="text-sm text-destructive">{{ staffForm.errors.value.school_id }}</p>
+          </div>
+
+          <div v-else class="grid gap-4 sm:grid-cols-2">
+            <div class="space-y-1.5">
+              <label for="staff-department" class="text-sm font-medium">Department</label>
+              <Select v-model="staffDepartmentId" v-bind="staffDepartmentIdAttrs">
+                <SelectTrigger id="staff-department" class="w-full">
+                  <SelectValue placeholder="Select a department" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="d in departmentsPicker.data.value" :key="d.id" :value="String(d.id)">{{ d.name }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="space-y-1.5">
+              <label for="staff-company" class="text-sm font-medium">Company</label>
+              <Select v-model="staffCompanyId" v-bind="staffCompanyIdAttrs" :disabled="!staffDepartmentId">
+                <SelectTrigger id="staff-company" class="w-full">
+                  <SelectValue placeholder="Select a company" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="c in staffCompaniesPicker.data.value" :key="c.id" :value="String(c.id)">{{ c.name }}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p v-if="staffForm.errors.value.company_id" class="text-sm text-destructive">{{ staffForm.errors.value.company_id }}</p>
+              <p
+                v-if="staffDepartmentId && staffCompaniesPicker.isSuccess.value && staffCompaniesPicker.data.value?.length === 0"
+                class="text-sm text-muted-foreground"
+              >
+                This department has no companies yet.
+              </p>
+            </div>
+          </div>
+
+          <Button type="submit" :disabled="isStaffSubmitting">
+            {{ isStaffSubmitting ? 'Creating…' : 'Create account' }}
+          </Button>
+        </form>
       </CardContent>
     </Card>
   </div>

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Recovery replaces gin's default recovery so a panic always becomes the
@@ -16,6 +17,7 @@ func Recovery() gin.HandlerFunc {
 				log.Error().
 					Interface("panic", r).
 					Str("request_id", requestIDFrom(c)).
+					Str("trace_id", traceID(c)).
 					Str("path", c.Request.URL.Path).
 					Msg("panic recovered")
 				httpx.Fail(c, httpx.NewError(httpx.ErrInternal, "Something went wrong. Please try again."))
@@ -32,4 +34,12 @@ func requestIDFrom(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+func traceID(c *gin.Context) string {
+	sc := oteltrace.SpanContextFromContext(c.Request.Context())
+	if !sc.HasTraceID() {
+		return ""
+	}
+	return sc.TraceID().String()
 }

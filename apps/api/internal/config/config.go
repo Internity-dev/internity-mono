@@ -11,16 +11,17 @@ import (
 )
 
 type Config struct {
-	Env                string // "development" | "production" | "test"
-	Port               string
-	CookieSecure       bool
-	DatabaseURL        string
-	RedisURL           string
-	MinioEndpoint      string
-	MinioAccessKey     string
-	MinioSecretKey     string
-	MinioUseSSL        bool
-	CORSAllowedOrigins []string
+	Env                  string // "development" | "production" | "test"
+	Port                 string
+	CookieSecure         bool
+	DatabaseURL          string
+	RedisURL             string
+	MinioEndpoint        string
+	MinioAccessKey       string
+	MinioSecretKey       string
+	MinioUseSSL          bool
+	CORSAllowedOrigins   []string
+	OTelExporterEndpoint string // OTLP-HTTP collector host:port; empty disables tracing
 }
 
 func Load() (*Config, error) {
@@ -30,16 +31,17 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Env:                getEnv("APP_ENV", "development"),
-		Port:               getEnv("API_PORT", "8080"),
-		CookieSecure:       getEnv("COOKIE_SECURE", "false") == "true",
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		RedisURL:           os.Getenv("REDIS_URL"),
-		MinioEndpoint:      os.Getenv("MINIO_ENDPOINT"),
-		MinioAccessKey:     os.Getenv("MINIO_ACCESS_KEY"),
-		MinioSecretKey:     os.Getenv("MINIO_SECRET_KEY"),
-		MinioUseSSL:        getEnv("MINIO_USE_SSL", "false") == "true",
-		CORSAllowedOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")),
+		Env:                  getEnv("APP_ENV", "development"),
+		Port:                 getEnv("API_PORT", "8080"),
+		CookieSecure:         getEnv("COOKIE_SECURE", "false") == "true",
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		RedisURL:             os.Getenv("REDIS_URL"),
+		MinioEndpoint:        os.Getenv("MINIO_ENDPOINT"),
+		MinioAccessKey:       os.Getenv("MINIO_ACCESS_KEY"),
+		MinioSecretKey:       os.Getenv("MINIO_SECRET_KEY"),
+		MinioUseSSL:          getEnv("MINIO_USE_SSL", "false") == "true",
+		CORSAllowedOrigins:   splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")),
+		OTelExporterEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
 
 	if cfg.Env == "production" {

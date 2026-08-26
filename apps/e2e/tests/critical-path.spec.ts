@@ -177,7 +177,10 @@ async function loginAs(page: Page, email: string, password: string) {
   // and the auth-flow localization pass. Copy the exact current strings
   // instead of the English ones the original plan assumed.
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Kata sandi').fill(password)
+  // exact: true — the password field's own show/hide toggle button has an
+  // aria-label of "Tampilkan kata sandi", which contains "Kata sandi" as a
+  // substring, and Playwright's getByLabel matches substrings by default.
+  await page.getByLabel('Kata sandi', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Masuk' }).click()
   await expect(page).toHaveURL(/\/dashboard$/)
 

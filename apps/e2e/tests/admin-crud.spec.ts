@@ -63,7 +63,10 @@ async function loginAs(page: Page, email: string, password: string) {
   await page.context().clearCookies()
   await page.goto('/login')
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Kata sandi').fill(password)
+  // exact: true — the password field's own show/hide toggle button has an
+  // aria-label of "Tampilkan kata sandi", which contains "Kata sandi" as a
+  // substring, and Playwright's getByLabel matches substrings by default.
+  await page.getByLabel('Kata sandi', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Masuk' }).click()
   await expect(page).toHaveURL(/\/dashboard$/)
 
@@ -508,10 +511,11 @@ test.describe('org-management CRUD', () => {
     await loginAs(page, COORDINATOR_EMAIL, PASSWORD)
 
     // Not a Dialog — a plain Card form embedded in the page (confirmed by
-    // reading UsersView.vue). There is no "Add user" button anywhere on
-    // this screen — user accounts are only ever created by the person
-    // themselves via /register with a code generated here, never directly
-    // by staff.
+    // reading UsersView.vue). Student accounts are still only ever created
+    // by the student themselves via /register with a code generated here,
+    // never directly by staff — a separate "Create staff account" Card
+    // further down the same page covers coordinator/mentor accounts only
+    // (see identity.Service.CreateStaffAccount), not students.
     //
     // The Card is positioned AFTER the DataTable in the template — with
     // enough seeded/test-created users to make that table tall (the
@@ -523,11 +527,19 @@ test.describe('org-management CRUD', () => {
     // once opened and the page doesn't stay scrolled where expected — so
     // this sidesteps the whole scroll/portal-position interaction with a
     // viewport tall enough to fit the card without scrolling at all.
-    await page.setViewportSize({ width: 1280, height: 2400 })
+    // 3200, not 2400 — a second Card ("Create staff account", exercised
+    // below) now sits under this one on the same page, pushing its own
+    // Select triggers even further down than the invite-code form alone
+    // needed to account for.
+    await page.setViewportSize({ width: 1280, height: 3200 })
     await page.goto('/admin/users')
-    await page.getByLabel('Department').click()
+    // #invite-department / #invite-course, not getByLabel('Department') —
+    // the "Create staff account" Card further down this same page has its
+    // own Department picker for mentor scope, so the bare label text is
+    // ambiguous on this page now.
+    await page.locator('#invite-department').click()
     await page.getByRole('option', { name: DEPARTMENT_NAME }).click()
-    await page.getByLabel('Course').click()
+    await page.locator('#invite-course').click()
     await page.getByRole('option', { name: COURSE_NAME }).click()
     await page.getByRole('button', { name: 'Generate invite code' }).click()
 
@@ -537,5 +549,26 @@ test.describe('org-management CRUD', () => {
     // guessing a selector for it; asserting the section heading is enough
     // to prove the flow completed without needing to parse the code text.
     await expect(page.getByText('Recently generated')).toBeVisible()
+
+    // A coordinator can also create a mentor account directly (no invite
+    // code involved — identity.Service.CreateStaffAccount), scoped to a
+    // company within their own school. Proven end to end, not just via the
+    // success toast: log in as the freshly created account afterward.
+    const mentorEmail = `e2e-mentor-${Date.now()}@internity.test`
+    await page.getByLabel('Name').fill('E2E Created Mentor')
+    await page.getByLabel('Email').fill(mentorEmail)
+    await page.getByLabel('Initial password').fill(PASSWORD)
+    await page.getByLabel('Confirm password').fill(PASSWORD)
+    // Role defaults to "Mentor" (the only option a coordinator sees — the
+    // "Coordinator" choice only renders for an admin actor), so the
+    // Department -> Company cascade is already showing.
+    await page.locator('#staff-department').click()
+    await page.getByRole('option', { name: DEPARTMENT_NAME }).click()
+    await page.locator('#staff-company').click()
+    await page.getByRole('option', { name: MONITOR_COMPANY_NAME }).click()
+    await page.getByRole('button', { name: 'Create account' }).click()
+    await expect(page.getByText('Account created')).toBeVisible()
+
+    await loginAs(page, mentorEmail, PASSWORD)
   })
 })

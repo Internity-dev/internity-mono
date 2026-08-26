@@ -12,12 +12,20 @@ import (
 	"internity/internal/modules/identity"
 	"internity/internal/modules/notification"
 	"internity/internal/platform/logger"
+	"internity/internal/platform/otel"
 	"internity/internal/platform/postgres"
 	"internity/internal/platform/queue"
 
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog/log"
+	gootel "go.opentelemetry.io/otel"
 )
+
+// tracer names spans for the two job handlers below. There's no maintained
+// asynq-otel-contrib middleware to reach for, so each handler starts its own
+// span manually rather than building a generic middleware layer for two
+// handlers.
+var tracer = gootel.Tracer("internity-worker")
 
 func main() {
 	cfg, err := config.Load()
@@ -25,6 +33,12 @@ func main() {
 		panic(err)
 	}
 	logger.Init(cfg.Env)
+
+	shutdownTracing, err := otel.Init(context.Background(), "internity-worker", cfg.OTelExporterEndpoint)
+	if err != nil {
+		log.Fatal().Err(err).Msg("worker: failed to init opentelemetry")
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	db, err := postgres.Open(cfg.DatabaseURL, cfg.Env == "development")
 	if err != nil {
@@ -45,6 +59,8 @@ func main() {
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TypeNotificationSend, func(ctx context.Context, t *asynq.Task) error {
+		ctx, span := tracer.Start(ctx, queue.TypeNotificationSend)
+		defer span.End()
 		var p queue.NotificationSendPayload
 		if err := json.Unmarshal(t.Payload(), &p); err != nil {
 			return err
@@ -52,6 +68,8 @@ func main() {
 		return notificationSvc.Send(ctx, p.UserID, p.Type, p.Title, p.Body)
 	})
 	mux.HandleFunc(queue.TypeEmailPasswordReset, func(ctx context.Context, t *asynq.Task) error {
+		ctx, span := tracer.Start(ctx, queue.TypeEmailPasswordReset)
+		defer span.End()
 		var p queue.EmailPasswordResetPayload
 		if err := json.Unmarshal(t.Payload(), &p); err != nil {
 			return err

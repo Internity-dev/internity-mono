@@ -22,7 +22,9 @@ import (
 	"internity/internal/modules/vacancy"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"gorm.io/gorm"
 )
 
@@ -47,9 +49,10 @@ func New(cfg *config.Config, deps Dependencies) *gin.Engine {
 	}
 
 	r := gin.New()
-	r.Use(middleware.RequestID(), middleware.Recovery(), gin.Logger(), middleware.CORS(cfg.CORSAllowedOrigins), middleware.SecurityHeaders(cfg.CookieSecure))
+	r.Use(middleware.RequestID(), otelgin.Middleware("internity-api"), middleware.Metrics(), middleware.Recovery(), gin.Logger(), middleware.CORS(cfg.CORSAllowedOrigins), middleware.SecurityHeaders(cfg.CookieSecure))
 
 	registerHealthRoutes(r, deps.DB, deps.Redis)
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	api := r.Group("/api/v1")
 

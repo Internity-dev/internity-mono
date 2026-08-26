@@ -1,13 +1,20 @@
 COMPOSE = docker compose --project-directory . --env-file .env -f deploy/docker-compose.yml
+COMPOSE_PROD = docker compose --project-directory . --env-file .env.prod -f deploy/docker-compose.prod.yml
 DATABASE_URL ?= postgres://internity:internity@localhost:5432/internity?sslmode=disable
 
-.PHONY: dev down migrate-up migrate-down migrate-create seed test-api test-dashboard test-e2e lint
+.PHONY: dev down prod prod-down migrate-up migrate-down migrate-create seed test-api test-integration test-dashboard test-e2e lint
 
 dev: ## Build + start the full stack (postgres, redis, minio, api, worker, dashboard, landing)
 	$(COMPOSE) up --build
 
 down: ## Stop and remove all containers (keeps named volumes)
 	$(COMPOSE) down
+
+prod: ## Build + start the production stack (see .env.prod.example for required vars)
+	$(COMPOSE_PROD) up --build -d
+
+prod-down: ## Stop and remove all production containers (keeps named volumes)
+	$(COMPOSE_PROD) down
 
 migrate-up: ## Apply all pending migrations against DATABASE_URL
 	migrate -database "$(DATABASE_URL)" -path apps/api/migrations up
@@ -21,8 +28,11 @@ migrate-create: ## Create a new migration pair: make migrate-create name=add_foo
 seed: ## Load minimal demo data (1 school -> 1 department -> 1 course -> 2 companies -> one user per role)
 	cd apps/api && go run ./cmd/seed
 
-test-api: ## Go unit + integration tests (race detector, coverage)
+test-api: ## Go unit tests (race detector, coverage)
 	cd apps/api && go test ./... -race -cover
+
+test-integration: ## Go integration tests against a real Postgres via testcontainers (needs Docker)
+	cd apps/api && go test -tags=integration ./...
 
 test-dashboard: ## Vitest component/composable tests
 	pnpm --filter @internity/dashboard test:unit

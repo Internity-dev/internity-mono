@@ -94,7 +94,9 @@ apps/
 packages/
   design-tokens/  shared color/type/spacing tokens -> Tailwind v4 theme for both frontends
 deploy/
-  docker-compose.yml  postgres, redis, minio(+init), migrate, api, worker, dashboard, landing
+  docker-compose.yml          dev stack: postgres, redis, minio(+init), migrate, api, worker, dashboard, landing
+  docker-compose.prod.yml     same services, hardened for a real deploy (see Production below)
+  docker-compose.dokploy.yml  same again, adapted for Dokploy's network/routing model (see docs/dokploy.md)
 ```
 
 **Backend modules** (`apps/api/internal/modules/`): `identity` (auth/sessions/users/invite
@@ -188,6 +190,35 @@ installed. Everything it wires together has been run for real, though, just outs
 the API and dashboard against a live Postgres and Redis, driven end to end by the Playwright suite
 below. Flag anything that doesn't come up clean on first run.
 
+### Production
+```
+cp .env.prod.example .env.prod   # fill in real secrets and public URLs
+make prod                        # build + start the hardened stack, detached
+make prod-down                   # stop it
+```
+`deploy/docker-compose.prod.yml` is the same nine services as the dev stack, hardened: the
+dashboard and landing containers run their own multi-stage `Dockerfile.prod` (a real `pnpm run
+build` served by `nginxinc/nginx-unprivileged`, no dev server and no source bind-mounts) instead of
+the dev images' live-reloading dev servers; `apps/api/Dockerfile` (shared by `api` and `worker`)
+runs as a non-root user; `APP_ENV` is `production` and `COOKIE_SECURE` is `true`; every secret
+(`POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, the public API/dashboard URLs baked into the frontend
+builds, and so on) is a required env var with no weak inline fallback, so compose refuses to start
+with a clear error if `.env.prod` is incomplete; Postgres/Redis/MinIO ports aren't published to the
+host, only `api`/`dashboard`/`landing` are; every long-running service has `restart: unless-stopped`
+and a basic CPU/memory limit; and `minio`/`migrate` are pinned to specific release tags instead of
+`latest`. There's no Docker daemon in this environment, so this compose file and both `.prod`
+Dockerfiles are reviewed for correctness, not build-tested locally; say so plainly rather than
+claiming a verification that didn't happen. The images they build from (`apps/api`'s Go build, the
+frontends' `pnpm run build` output) are exercised for real elsewhere in this README (`go build
+./...`, `vue-tsc --build`, and the local `pnpm run build` used to confirm the landing site's actual
+static output shape while writing its Dockerfile).
+
+Deploying to [Dokploy](https://dokploy.com/) specifically uses a separate
+`deploy/docker-compose.dokploy.yml` and `.env.dokploy.example` instead, since Dokploy's Traefik
+routing expects a shared `dokploy-network` and container ports (`expose`) rather than host port
+publishing. See [docs/dokploy.md](docs/dokploy.md) for the full setup, including the paste-ready
+env block and per-service domain configuration.
+
 ### Migrations
 ```
 make migrate-up                        # apply all pending migrations
@@ -217,24 +248,38 @@ password `password123`:
 
 ```
 make test-api          # Go unit tests
+make test-integration   # Go integration tests against a real containerized Postgres (needs Docker)
 make test-dashboard     # Vitest component/composable tests
 make test-e2e           # Playwright critical-path E2E (needs `make dev` + `make seed` running first)
 ```
 
-**Unit tests.** 104 Go tests cover the state-machine transition guards (appliance, intern-date),
-scope checks, Postgres error translation, and DTO validation as pure-function tests. 164 Vitest
-tests cover the dashboard's shared UI primitives (`components/shared/*`), composables
-(`useListQuery`, `useTour`), the auth store, and the `lib/` helpers (status mapping, nav
-filtering, the axios instance's CSRF and single-flight-refresh interceptors) via
-`@vue/test-utils` and mocked dependencies. The dashboard's real type-check command is
-`vue-tsc --build` (via `pnpm run type-check`); a plain `vue-tsc --noEmit` silently no-ops in this
-project's TS project-references setup, so use `--build` when verifying.
+**Unit tests.** 193 Go tests cover the state-machine transition guards (appliance, intern-date),
+service-layer permission gates and scope checks (`vacancy`, `internship`, `scoring`, `content`,
+`identity`), Postgres error translation, and DTO validation as pure-function tests. Every service
+holds a concrete `*gorm.DB`-backed repository rather than an interface, so these tests don't mock
+the database; they construct the service with a `nil` repository and exercise only the paths that
+return on a role or scope check before ever touching it, following this codebase's existing
+no-mocking-library convention. 164 Vitest tests cover the dashboard's shared UI primitives
+(`components/shared/*`), composables (`useListQuery`, `useTour`), the auth store, and the `lib/`
+helpers (status mapping, nav filtering, the axios instance's CSRF and single-flight-refresh
+interceptors) via `@vue/test-utils` and mocked dependencies. The dashboard's real type-check
+command is `vue-tsc --build` (via `pnpm run type-check`); a plain `vue-tsc --noEmit` silently
+no-ops in this project's TS project-references setup, so use `--build` when verifying.
 
-**Integration tests were designed but not run against `testcontainers-go`.** Repository/
-service-layer tests against a disposable, containerized Postgres were planned, but this
-environment has no Docker to run them in. The E2E suite below fills a similar gap in practice: it
-drives real HTTP requests through the real service and repository layers against a live database,
-just not through `testcontainers-go` specifically.
+**Integration tests run in CI, not in this sandboxed dev environment.** One test
+(`internship/integration_test.go`, tagged `//go:build integration` so `make test-api`'s plain
+`go test ./...` never touches it) spins up a real `postgres:16-alpine` container via
+`testcontainers-go`, runs the actual `golang-migrate` migration set against it, and confirms the
+`intern_dates` table's GiST exclusion constraint really rejects an overlapping placement date range
+for the same student, something a nil-repository unit test can't verify since it's enforced by
+Postgres itself, not application code. This environment has no Docker daemon, so it's only ever
+compiled and checked here (`go vet -tags=integration ./...`); the `integration` job in
+`.github/workflows/ci-api.yml` actually runs it, since GitHub-hosted runners come with a real Docker
+daemon `testcontainers-go` can talk to. The `migrate` job in that same workflow separately proves
+the migration set is reproducible from empty and that the most recent migration's `up`/`down` pair
+is correct, not just its `up`, against a plain `services: postgres` container. The E2E suite below
+fills a similar gap in practice locally: it drives real HTTP requests through the real service and
+repository layers against a live database, just not through `testcontainers-go` specifically.
 
 **E2E runs against a live stack, and it's what actually found most of the bugs listed below.**
 Three Playwright spec files cover the full app, not just one happy path:
@@ -323,19 +368,26 @@ or at https://editor.swagger.io/ by pasting the file contents.
   itself is still a logged no-op (`identity.NoopMailer`) since no SMTP/provider is configured. What
   moved is *where* that call happens, the worker instead of the request path, not what it does.
   Wiring a real provider is a one-line swap in `cmd/worker/main.go`.
+- **OpenTelemetry is wired in but inert until configured.** `internal/platform/otel.Init` installs a
+  real no-op tracer provider when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, so both `cmd/api` and
+  `cmd/worker` boot exactly as before with zero network calls, the same "wired but inert" shape as
+  `identity.NoopMailer`. Setting that env var switches on `otelgin` (HTTP spans), `otelgorm` (GORM
+  query spans), and manual spans around each Asynq job handler, all exported over OTLP-HTTP. Booted
+  and load-checked live against the running dev stack in the default no-op mode (health checks,
+  login, an authenticated request all still work); there's no collector in this environment to point
+  the exporter at, so the configured-and-exporting path itself isn't live-verified here.
+- **Prometheus metrics over an OTel metrics pipeline.** `GET /metrics` exposes
+  `http_requests_total` and `http_request_duration_seconds`, both labeled by method, route
+  (`c.FullPath()`'s template, e.g. `/api/v1/users/:id`, never the raw path with real IDs in it), and
+  status code, recorded by `middleware.Metrics()`. A plain `prometheus/client_golang` counter and
+  histogram were simpler to reach for than standing up a parallel OTel metrics SDK next to the
+  tracing one above, for the two HTTP-level numbers this project actually needs. Live-verified: real
+  request counts and latency buckets show up at `/metrics` after hitting the running API.
 
 ## Known limitations
 
 Noted deliberately, not hidden, so expectations are clear going into a demo or review:
 
-- There's no admin screen to create a new coordinator or mentor account. Those are still created
-  through `make seed` or a direct database insert.
-- A coordinator can't see the mentors in their own school from the Users page. Mentor accounts are
-  scoped by `company_id`, and that list query never joins back to `school_id` to filter by it.
-  Confirmed live during E2E testing: a coordinator session calling `GET /users?role=mentor` gets
-  an empty result even for a mentor at a company genuinely in that coordinator's school, because
-  `ListUsers` forces a `school_id` filter onto every coordinator request and mentors don't have
-  one.
 - A company can only belong to one school/department. There's no many-to-many relationship for a
   company that genuinely partners with more than one school.
 
@@ -343,9 +395,6 @@ Noted deliberately, not hidden, so expectations are clear going into a demo or r
 
 - Route PDF/Excel export generation and a cron-style internship-end-date reminder through the
   Asynq queue too, the way notification fan-out and password-reset email already are.
-- Integration tests against a real, containerized Postgres via `testcontainers-go`. Designed and
-  ready, just blocked here by the lack of Docker in this environment.
-- OpenTelemetry tracing across the API and background jobs.
 - Upload malware/AV scanning on MinIO objects before they're served back.
 - A CD pipeline and live hosting. Out of scope by design for this submission (the deployment
   decision made at project kickoff was local `docker compose` only).

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type ErrorCode string
@@ -108,7 +109,7 @@ func FailFromErr(c *gin.Context, err error) {
 		Fail(c, apiErr)
 		return
 	}
-	log.Error().Err(err).Str("request_id", requestID(c)).Str("path", c.Request.URL.Path).Msg("unhandled error")
+	log.Error().Err(err).Str("request_id", requestID(c)).Str("trace_id", traceID(c)).Str("path", c.Request.URL.Path).Msg("unhandled error")
 	Fail(c, NewError(ErrInternal, "Something went wrong. Please try again."))
 }
 
@@ -119,4 +120,12 @@ func requestID(c *gin.Context) string {
 		}
 	}
 	return ""
+}
+
+func traceID(c *gin.Context) string {
+	sc := oteltrace.SpanContextFromContext(c.Request.Context())
+	if !sc.HasTraceID() {
+		return ""
+	}
+	return sc.TraceID().String()
 }

@@ -70,7 +70,10 @@ async function loginAs(page: Page, email: string, password: string) {
   await page.context().clearCookies()
   await page.goto('/login')
   await page.getByLabel('Email').fill(email)
-  await page.getByLabel('Kata sandi').fill(password)
+  // exact: true — the password field's own show/hide toggle button has an
+  // aria-label of "Tampilkan kata sandi", which contains "Kata sandi" as a
+  // substring, and Playwright's getByLabel matches substrings by default.
+  await page.getByLabel('Kata sandi', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Masuk' }).click()
   await expect(page).toHaveURL(/\/dashboard$/)
 
@@ -268,7 +271,8 @@ test.describe('auth edge cases', () => {
     // + this file's own reject/cancel + excuse/reviews flows) already adds
     // up to more than 5 for budi specifically when this test also spent one.
     await page.getByLabel('Email').fill('nobody-e2e@internity.test')
-    await page.getByLabel('Kata sandi').fill('definitely-the-wrong-password')
+    // exact: true — see loginAs's identical comment above.
+    await page.getByLabel('Kata sandi', { exact: true }).fill('definitely-the-wrong-password')
     await page.getByRole('button', { name: 'Masuk' }).click()
 
     // LoginView.vue shows a persistent Alert (title always "Gagal masuk")

@@ -21,3 +21,49 @@ jobs:
       - run: go vet ./...
       - run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
       - run: go test ./... -race -cover
+
+  # Proves the migration set is reproducible from empty (section 5's
+  # requirement), and specifically that the most recent migration's up/down
+  # pair is correct, not just its up.
+  migrate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: internity
+          POSTGRES_PASSWORD: internity
+          POSTGRES_DB: internity
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U internity"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install golang-migrate CLI
+        run: |
+          curl -sL https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-amd64.tar.gz | tar xz
+          sudo mv migrate /usr/local/bin/migrate
+      - name: Apply all migrations, roll back the last one, reapply it
+        env:
+          DATABASE_URL: postgres://internity:internity@localhost:5432/internity?sslmode=disable
+        run: |
+          migrate -path apps/api/migrations -database "$DATABASE_URL" up
+          migrate -path apps/api/migrations -database "$DATABASE_URL" down 1
+          migrate -path apps/api/migrations -database "$DATABASE_URL" up
+
+  # GitHub-hosted runners have a real Docker daemon, unlike the sandboxed dev
+  # environment this project was otherwise built in, so the testcontainers-go
+  # integration suite (gated behind the `integration` build tag) actually
+  # runs here instead of only compiling.
+  integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+      - run: go test -tags=integration ./...

@@ -33,4 +33,5 @@ func (h *Handler) RegisterAuthenticatedRoutes(rg *gin.RouterGroup) {
 
 	users := rg.Group("/users")
 	users.GET("", h.ListUsers)
+	users.POST("", h.CreateStaffAccount)
 }

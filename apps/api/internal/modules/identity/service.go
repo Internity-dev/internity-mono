@@ -39,15 +39,26 @@ func DefaultConfig() Config {
 	return Config{AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 }
 
-type Service struct {
-	repo    Repository
-	mailer  Mailer
-	cfg     Config
-	storage *storage.Client
+// CompanyScopeResolver lets a coordinator's mentor lookups (ListUsers) and a
+// coordinator's mentor-account creation (CreateStaffAccount) verify a
+// company belongs to their own school, without identity importing orgs'
+// repository directly — same shape and same cross-module pattern already
+// used by vacancy.Service (see the companyScopeAdapter wired in
+// cmd/api/main.go, reused here rather than duplicated).
+type CompanyScopeResolver interface {
+	ResolveCompanyScope(ctx context.Context, companyID int64) (schoolID, departmentID int64, err error)
 }
 
-func NewService(repo Repository, mailer Mailer, cfg Config, storageClient *storage.Client) *Service {
-	return &Service{repo: repo, mailer: mailer, cfg: cfg, storage: storageClient}
+type Service struct {
+	repo      Repository
+	mailer    Mailer
+	cfg       Config
+	storage   *storage.Client
+	companies CompanyScopeResolver
+}
+
+func NewService(repo Repository, mailer Mailer, cfg Config, storageClient *storage.Client, companies CompanyScopeResolver) *Service {
+	return &Service{repo: repo, mailer: mailer, cfg: cfg, storage: storageClient, companies: companies}
 }
 
 // LoginResult carries everything the HTTP handler needs to set the three
@@ -336,14 +347,15 @@ func (s *Service) CreateInviteCode(ctx context.Context, actor *User, in InviteCo
 // so filtering on it alone already limits the result to "coordinators and
 // students at my school" with no extra role check needed.
 //
-// Mentors are scoped by company_id, not school_id, and a company only
-// resolves to a school via companies -> departments -> school_id — a join
-// this module doesn't have (that lives in orgs.Repository.ResolveCompanyScope).
-// Wiring it here would mean identity depending on orgs' repository just for
-// this one list column, so a coordinator's user directory deliberately does
-// not include mentors for now — the same tradeoff vacancy.Service's
-// ApplianceStatusCounts made for a school-scoped coordinator view it also
-// can't cleanly join yet.
+// Mentors are the one exception: they're scoped by company_id, not
+// school_id, so the blanket school_id pin above would AND against a column
+// that's always NULL on a mentor row and silently return nothing. A
+// coordinator asking for role=mentor must supply a company_id, which gets
+// resolved to a school via CompanyScopeResolver (companies -> departments ->
+// school_id) and checked against the coordinator's own school instead of
+// pinning school_id directly. This only fixes the single-company lookup —
+// it deliberately does not support "every mentor in my school" in one call,
+// since UserFilter has no company-list-by-school capability to back that.
 func (s *Service) ListUsers(ctx context.Context, actor *User, filter UserFilter, params httpx.ListParams) ([]User, int64, error) {
 	forbidden := httpx.NewError(httpx.ErrForbidden, "You do not have permission to do that")
 
@@ -354,12 +366,120 @@ func (s *Service) ListUsers(ctx context.Context, actor *User, filter UserFilter,
 		if actor.SchoolID == nil {
 			return nil, 0, forbidden
 		}
-		filter.SchoolID = actor.SchoolID
+		if filter.Role != nil && *filter.Role == RoleMentor {
+			if filter.CompanyID == nil {
+				return nil, 0, httpx.NewError(httpx.ErrValidation, "company_id is required when filtering mentors",
+					httpx.ErrorDetail{Field: "company_id", Issue: "required"})
+			}
+			schoolID, _, err := s.companies.ResolveCompanyScope(ctx, *filter.CompanyID)
+			if err != nil {
+				return nil, 0, err
+			}
+			if schoolID != *actor.SchoolID {
+				return nil, 0, forbidden
+			}
+			// Leave filter.SchoolID nil here — mentor rows never have one,
+			// and filter.CompanyID above already does the real narrowing.
+		} else {
+			filter.SchoolID = actor.SchoolID
+		}
 	default:
 		return nil, 0, forbidden
 	}
 
 	return s.repo.ListUsers(ctx, filter, params)
+}
+
+type CreateStaffAccountInput struct {
+	Name                 string
+	Email                string
+	Password             string
+	PasswordConfirmation string
+	Role                 Role
+	SchoolID             *int64
+	CompanyID            *int64
+}
+
+// CreateStaffAccount is how a coordinator or mentor account comes to exist
+// outside of `make seed` — issued by an admin (any school/company) or a
+// coordinator (mentor only, and only for a company within their own
+// school). Deliberately not a student- or admin-provisioning path: student
+// self-registration already exists via Register, and creating another
+// admin isn't a scenario this needs to cover.
+//
+// Unlike Register, no session is issued — the caller stays logged in as
+// themselves, not as the account they just created. The caller sets the new
+// account's initial password directly rather than one being generated and
+// emailed: Mailer is a logged no-op with no real SMTP provider configured,
+// so a generated password would be undeliverable and invisible to everyone,
+// caller included. The new user changes it via the existing ChangePassword
+// flow after their first login.
+func (s *Service) CreateStaffAccount(ctx context.Context, actor *User, in CreateStaffAccountInput) (*User, error) {
+	forbidden := httpx.NewError(httpx.ErrForbidden, "You do not have permission to do that")
+	if actor.Role != RoleAdmin && actor.Role != RoleCoordinator {
+		return nil, forbidden
+	}
+	if in.Role != RoleCoordinator && in.Role != RoleMentor {
+		return nil, httpx.NewError(httpx.ErrValidation, "role must be coordinator or mentor",
+			httpx.ErrorDetail{Field: "role", Issue: "must be coordinator or mentor"})
+	}
+	if actor.Role == RoleCoordinator && in.Role != RoleMentor {
+		return nil, forbidden
+	}
+	if in.Password != in.PasswordConfirmation {
+		return nil, httpx.NewError(httpx.ErrValidation, "Password confirmation does not match",
+			httpx.ErrorDetail{Field: "password_confirmation", Issue: "must match password"})
+	}
+
+	user := &User{
+		ID:       uuid.NewString(),
+		Role:     in.Role,
+		Name:     in.Name,
+		Email:    in.Email,
+		IsActive: true,
+	}
+
+	switch in.Role {
+	case RoleCoordinator:
+		if in.SchoolID == nil {
+			return nil, httpx.NewError(httpx.ErrValidation, "school_id is required for a coordinator account",
+				httpx.ErrorDetail{Field: "school_id", Issue: "required"})
+		}
+		user.SchoolID = in.SchoolID
+	case RoleMentor:
+		if in.CompanyID == nil {
+			return nil, httpx.NewError(httpx.ErrValidation, "company_id is required for a mentor account",
+				httpx.ErrorDetail{Field: "company_id", Issue: "required"})
+		}
+		schoolID, _, err := s.companies.ResolveCompanyScope(ctx, *in.CompanyID)
+		if err != nil {
+			return nil, err
+		}
+		if actor.Role == RoleCoordinator && (actor.SchoolID == nil || *actor.SchoolID != schoolID) {
+			return nil, forbidden
+		}
+		user.CompanyID = in.CompanyID
+	}
+
+	taken, err := s.repo.EmailTaken(ctx, in.Email)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, httpx.NewError(httpx.ErrConflict, "An account with this email already exists",
+			httpx.ErrorDetail{Field: "email", Issue: "already registered"})
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	user.PasswordHash = string(hash)
+
+	if err := s.repo.CreateUser(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 func (s *Service) issueSession(ctx context.Context, user *User, familyID, userAgent, ip string) (*LoginResult, error) {

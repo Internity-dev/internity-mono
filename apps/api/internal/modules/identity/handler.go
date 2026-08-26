@@ -229,6 +229,39 @@ func (h *Handler) CreateInviteCode(c *gin.Context) {
 	httpx.OK(c, http.StatusCreated, code, "Invite code created", nil)
 }
 
+type createStaffAccountRequest struct {
+	Name                 string `json:"name" binding:"required,min=2,max=255"`
+	Email                string `json:"email" binding:"required,email"`
+	Password             string `json:"password" binding:"required,min=8,max=72"`
+	PasswordConfirmation string `json:"password_confirmation" binding:"required"`
+	Role                 Role   `json:"role" binding:"required,oneof=coordinator mentor"`
+	SchoolID             *int64 `json:"school_id" binding:"omitempty"`
+	CompanyID            *int64 `json:"company_id" binding:"omitempty"`
+}
+
+func (h *Handler) CreateStaffAccount(c *gin.Context) {
+	var req createStaffAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httpx.Fail(c, httpx.BindingError(err))
+		return
+	}
+	actor := currentUserFromContext(c)
+	if actor == nil {
+		httpx.Fail(c, httpx.NewError(httpx.ErrUnauthenticated, "Not authenticated"))
+		return
+	}
+	user, err := h.svc.CreateStaffAccount(c.Request.Context(), actor, CreateStaffAccountInput{
+		Name: req.Name, Email: req.Email, Password: req.Password,
+		PasswordConfirmation: req.PasswordConfirmation, Role: req.Role,
+		SchoolID: req.SchoolID, CompanyID: req.CompanyID,
+	})
+	if err != nil {
+		httpx.FailFromErr(c, err)
+		return
+	}
+	httpx.OK(c, http.StatusCreated, user.ToResponse(), "Account created", nil)
+}
+
 func (h *Handler) setAuthCookies(c *gin.Context, result *LoginResult) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(CookieSession, result.AccessToken, secondsUntil(result.AccessExpiresAt), "/", "", h.cookieSecure, true)
