@@ -101,7 +101,13 @@ func (h *Handler) Refresh(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.Refresh(c.Request.Context(), rawRefresh, c.Request.UserAgent(), c.ClientIP())
+	// Read whatever CSRF cookie the caller currently has (ignore the error —
+	// an empty string here just falls back to minting a fresh one, same as
+	// before). See Service.Refresh's comment for why this must be carried
+	// forward instead of always rotating.
+	existingCSRF, _ := c.Cookie(CookieCSRF)
+
+	result, err := h.svc.Refresh(c.Request.Context(), rawRefresh, existingCSRF, c.Request.UserAgent(), c.ClientIP())
 	if err != nil {
 		h.clearAuthCookies(c)
 		httpx.FailFromErr(c, err)

@@ -41,21 +41,23 @@ function skillList(skills: string | null | undefined): string[] {
     .filter(Boolean)
 }
 
-function errorMessage(err: unknown, fallback: string): string {
-  return (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback
-}
-
 // The vacancy detail response has no is_saved flag — track the saved state
 // locally (optimistic) since there's no read endpoint to derive it from.
 const isSaved = ref(false)
 
+// No onError here (or below): http.ts's response interceptor already toasts
+// every failed mutation (it has the backend's own message to show, which is
+// exactly what a local fallback would have repeated). A local onError that
+// ALSO calls toast.error double-toasts the same failure — confirmed live on
+// Apply now, where a single 403 produced two identical toasts. onSuccess
+// still needs to be local (optimistic isSaved flip, redirect, etc.) since
+// the interceptor has no notion of "this specific mutation succeeded."
 const saveMutation = useMutation({
   mutationFn: () => http.post(`/vacancies/${vacancyId.value}/save`),
   onSuccess: () => {
     isSaved.value = true
     toast.success('Vacancy saved')
   },
-  onError: (err) => toast.error(errorMessage(err, 'Failed to save vacancy')),
 })
 
 const unsaveMutation = useMutation({
@@ -64,7 +66,6 @@ const unsaveMutation = useMutation({
     isSaved.value = false
     toast.success('Vacancy removed from saved list')
   },
-  onError: (err) => toast.error(errorMessage(err, 'Failed to unsave vacancy')),
 })
 
 const message = ref('')
@@ -76,7 +77,6 @@ const applyMutation = useMutation({
     toast.success('Application submitted')
     router.push('/my-applications')
   },
-  onError: (err) => toast.error(errorMessage(err, 'Failed to submit application')),
 })
 </script>
 

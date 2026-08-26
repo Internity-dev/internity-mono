@@ -136,7 +136,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*LoginResult,
 		return nil, err
 	}
 
-	return s.issueSession(ctx, user, uuid.NewString(), in.UserAgent, in.IP)
+	return s.issueSession(ctx, user, uuid.NewString(), "", in.UserAgent, in.IP)
 }
 
 func (s *Service) Login(ctx context.Context, email, password, userAgent, ip string) (*LoginResult, error) {
@@ -167,7 +167,7 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, ip stri
 		return nil, err
 	}
 
-	return s.issueSession(ctx, user, uuid.NewString(), userAgent, ip)
+	return s.issueSession(ctx, user, uuid.NewString(), "", userAgent, ip)
 }
 
 // Refresh rotates the refresh token: the presented token is revoked and a new
@@ -175,7 +175,23 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, ip stri
 // already-revoked token (replay of a stolen/duplicated refresh cookie) is
 // treated as theft evidence and revokes every session in that family,
 // forcing a full re-login everywhere — see plan section 2.3.
-func (s *Service) Refresh(ctx context.Context, rawRefreshToken, userAgent, ip string) (*LoginResult, error) {
+//
+// existingCSRFToken (the raw value of the caller's current internity_csrf
+// cookie, read by the handler before calling this) is deliberately carried
+// forward into the new LoginResult instead of minting a new one every
+// refresh. The CSRF cookie doesn't need to rotate on the same cadence as the
+// access/refresh pair — it isn't a bearer credential, just an
+// attacker-can't-read-it value — and rotating it here raced the frontend's
+// double-submit check: http.ts reads document.cookie synchronously to build
+// the X-CSRF-Token header, but the browser attaches the actual Cookie header
+// at network-dispatch time, which is a distinct, later moment. If some OTHER
+// in-flight request's /auth/refresh response rotated the cookie in that gap,
+// a request built just before it would ship with a stale header against a
+// fresh cookie — a clean single 403 with no visible retry, since the 401
+// that triggered the rotation happened on a different URL entirely. Keeping
+// the value stable across refreshes (only extending its expiry) removes the
+// race at the source.
+func (s *Service) Refresh(ctx context.Context, rawRefreshToken, existingCSRFToken, userAgent, ip string) (*LoginResult, error) {
 	unauthenticated := httpx.NewError(httpx.ErrUnauthenticated, "Session expired, please log in again")
 
 	hash := hashToken(rawRefreshToken)
@@ -208,7 +224,7 @@ func (s *Service) Refresh(ctx context.Context, rawRefreshToken, userAgent, ip st
 	if err := s.repo.RevokeSession(ctx, session.ID); err != nil {
 		return nil, err
 	}
-	return s.issueSession(ctx, user, session.FamilyID, userAgent, ip)
+	return s.issueSession(ctx, user, session.FamilyID, existingCSRFToken, userAgent, ip)
 }
 
 func (s *Service) Logout(ctx context.Context, rawAccessToken, rawRefreshToken string) error {
@@ -482,7 +498,10 @@ func (s *Service) CreateStaffAccount(ctx context.Context, actor *User, in Create
 	return user, nil
 }
 
-func (s *Service) issueSession(ctx context.Context, user *User, familyID, userAgent, ip string) (*LoginResult, error) {
+// existingCSRFToken, when non-empty, is reused as-is instead of minting a
+// new CSRF token — see the comment on Refresh for why. Login/Register pass
+// "" since there is no prior cookie to carry forward for a brand-new session.
+func (s *Service) issueSession(ctx context.Context, user *User, familyID, existingCSRFToken, userAgent, ip string) (*LoginResult, error) {
 	now := time.Now()
 
 	rawAccess, err := newOpaqueToken()
@@ -509,9 +528,12 @@ func (s *Service) issueSession(ctx context.Context, user *User, familyID, userAg
 		return nil, err
 	}
 
-	rawCSRF, err := newOpaqueToken()
-	if err != nil {
-		return nil, err
+	rawCSRF := existingCSRFToken
+	if rawCSRF == "" {
+		rawCSRF, err = newOpaqueToken()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &LoginResult{
