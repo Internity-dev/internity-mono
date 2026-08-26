@@ -1,5 +1,8 @@
 import { driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
+// Themed override for driver.js's popover chrome — see src/assets/tour.css.
+// Imported after driver.css so its rules win in the cascade.
+import '@/assets/tour.css'
 
 /**
  * A thin wrapper around driver.js scoped per named tour (one per role — see
@@ -30,7 +33,10 @@ export function useTour(tourKey: string, steps: DriveStep[]) {
     const driverObj = driver({
       showProgress: true,
       allowClose: true,
-      overlayColor: 'rgba(15, 15, 20, 0.55)',
+      // --color-neutral-950 from @internity/design-tokens (packages/design-tokens/tokens.json)
+      // — same dark tone the app itself uses, rather than an ad-hoc black.
+      overlayColor: '#0d0f16',
+      overlayOpacity: 0.6,
       steps,
       onDestroyStarted: () => {
         markSeen()

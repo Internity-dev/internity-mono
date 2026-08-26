@@ -1,63 +1,90 @@
 import type { DriveStep } from 'driver.js'
 
-// Each step is written as a user story, per the product decision to frame
-// onboarding around "as a <role>, I want <goal> so <reason>" rather than a
-// dry feature list — see plan's "Onboarding tours (driver.js)" section.
+// Every step targets a real sidebar item (via data-tour-nav-target) or the
+// header bell, so the tour stays in sync with nav.ts by construction — add a
+// menu there and its tour step is the only other thing to add here.
 export const studentTourSteps: DriveStep[] = [
   {
     popover: {
       title: 'Welcome to Internity',
       description:
-        'As a student, you\'ll use this dashboard to find an internship, track your attendance, log your daily work, and download your certificate. Quick tour?',
+        'This dashboard covers your whole internship: finding a placement, checking in each day, logging your work, and getting your certificate at the end. Quick tour of every menu?',
     },
   },
   {
     element: '[data-tour-nav-target="/vacancies"]',
     popover: {
-      title: 'Find a placement',
-      description: 'As a student, I want to browse open internship vacancies at companies in my department so I can apply to one that fits me.',
+      title: 'Vacancies',
+      description:
+        'Browse every open internship listing from companies in your department. Search by company or skill, and check required skills, open slots, and the deadline before you apply.',
     },
   },
   {
     element: '[data-tour-nav-target="/my-applications"]',
     popover: {
-      title: 'Track your applications',
-      description: 'As a student, I want to see the status of every application I\'ve submitted: pending, under review, accepted, or rejected.',
+      title: 'My Applications',
+      description:
+        'Every vacancy you\'ve applied to, with its status: pending, accepted, or rejected. Your application note is here too, so you can see exactly what you sent.',
     },
   },
   {
     element: '[data-tour-nav-target="/my-internship"]',
     popover: {
-      title: 'Set your placement dates',
-      description: 'As a student, once accepted, I want to set my internship start and end dates so my attendance and journal periods are defined.',
+      title: 'My Internship',
+      description:
+        'Once a company accepts you, this becomes your placement record: which company, who your mentor is, and the start/end dates you set — those dates define your attendance and journal periods.',
     },
   },
   {
     element: '[data-tour-nav-target="/attendance"]',
     popover: {
-      title: 'Check in every day',
-      description: 'As a student, I want to check in/out with a photo and my location each workday, or file an excuse if I\'m sick or on leave.',
+      title: 'Attendance',
+      description:
+        'Check in and out each workday with a photo and your location, or file an excuse (sick, permit, leave) on a day you can\'t make it. Your mentor approves every entry.',
     },
   },
   {
     element: '[data-tour-nav-target="/journals"]',
     popover: {
-      title: 'Log your work',
-      description: 'As a student, I want to write a short journal entry for each day I attend, so my mentor can see and approve what I worked on.',
+      title: 'Journal',
+      description:
+        'Write a short entry for each day you attend, describing what you worked on. Your mentor reads and approves these, and they become part of your final record.',
     },
   },
   {
     element: '[data-tour-nav-target="/certificate"]',
     popover: {
-      title: 'Get your certificate',
-      description: 'As a student, once my internship is complete and scored, I want to download my official completion certificate here.',
+      title: 'Certificate',
+      description:
+        'Once your internship ends and your mentor has entered your scores, your official completion certificate becomes downloadable here.',
+    },
+  },
+  {
+    element: '[data-tour-nav-target="/news"]',
+    popover: {
+      title: 'News',
+      description: 'Announcements from your school and coordinator — new vacancies, deadline reminders, and program updates.',
+    },
+  },
+  {
+    element: '[data-tour-nav-target="/faq"]',
+    popover: {
+      title: 'FAQ',
+      description: 'Common questions about applying, attendance rules, and how certification works, answered before you have to ask.',
     },
   },
   {
     element: '[data-tour="notifications"]',
     popover: {
-      title: 'Stay in the loop',
-      description: 'Application updates, approvals, and school announcements all show up here.',
+      title: 'Notifications',
+      description: 'Application status changes, approvals, and announcements all land here first.',
+    },
+  },
+  {
+    element: '[data-tour-nav-target="/profile"]',
+    popover: {
+      title: 'Profile',
+      description: 'Update your name, avatar, and password, and check your account details.',
     },
   },
 ]

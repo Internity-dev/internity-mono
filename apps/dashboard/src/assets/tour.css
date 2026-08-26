@@ -1,0 +1,163 @@
+/*
+ * Theme override for driver.js's onboarding tour popover (see
+ * src/composables/useTour.ts). driver.js ships its own plain white/black
+ * popover chrome (dist/driver.css) — this file overrides those class names
+ * with this app's actual design tokens so the tour looks like the rest of
+ * Internity instead of a foreign widget.
+ *
+ * Deliberately targeted, not a vendored copy of driver.css: only the rules
+ * needed to reskin colors, radius, shadow, type, and buttons live here.
+ * Everything below reads CSS custom properties from
+ * @internity/design-tokens (packages/design-tokens/dist/theme.css, imported
+ * via src/assets/main.css) — those variables already flip for dark mode via
+ * the `.dark` class on <html> (see useDark() in DefaultLayout.vue), so this
+ * file needs no separate dark-mode branch.
+ *
+ * Class names verified against node_modules/driver.js/dist/driver.css
+ * (driver.js@1.8.0).
+ */
+
+.driver-popover {
+  font-family: var(--font-sans);
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.12),
+    0 4px 6px -4px rgb(0 0 0 / 0.12);
+  min-width: 280px;
+  max-width: 360px;
+  padding: 1.125rem 1.25rem 1.25rem;
+}
+
+.driver-popover-title {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--popover-foreground);
+  padding-right: 1.5rem;
+}
+
+.driver-popover-title[style*='block'] + .driver-popover-description,
+.driver-popover-description {
+  margin-top: 0.375rem;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.driver-popover-close-btn {
+  top: 0.625rem;
+  right: 0.625rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  background-color: transparent;
+  border-radius: 9999px;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+.driver-popover-close-btn:hover,
+.driver-popover-close-btn:focus {
+  color: var(--foreground);
+  background-color: var(--muted);
+}
+.driver-popover-close-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+
+.driver-popover-footer {
+  margin-top: 1.125rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border);
+}
+
+.driver-popover-progress-text {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.driver-popover-navigation-btns {
+  gap: 0.5rem;
+}
+.driver-popover-navigation-btns button + button {
+  margin-left: 0;
+}
+
+/* Base button reset — both Previous and Next/Done start here, then get
+   variant colors below, mirroring src/components/ui/button's
+   default (primary) vs outline variants. */
+.driver-popover-footer-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.5rem 0.875rem;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid transparent;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.driver-popover-footer-btn:active {
+  transform: translateY(1px);
+}
+.driver-popover-footer-btn:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+.driver-popover-footer .driver-popover-btn-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Previous — outline, like Button variant="outline" */
+.driver-popover-prev-btn {
+  color: var(--foreground);
+  background-color: var(--background);
+  border-color: var(--border);
+}
+.driver-popover-prev-btn:hover,
+.driver-popover-prev-btn:focus {
+  background-color: var(--muted);
+  color: var(--foreground);
+}
+
+/* Next / Done — primary, like Button variant="default" (no hover recolor,
+   just the app's press-down nudge — matches buttonVariants' primary style) */
+.driver-popover-next-btn {
+  color: var(--primary-foreground);
+  background-color: var(--primary);
+  border-color: transparent;
+}
+.driver-popover-next-btn:hover,
+.driver-popover-next-btn:focus {
+  color: var(--primary-foreground);
+  background-color: var(--primary);
+}
+
+.driver-popover-arrow {
+  border-color: var(--popover);
+}
