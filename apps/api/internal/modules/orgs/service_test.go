@@ -3,12 +3,24 @@ package orgs
 import (
 	"testing"
 
+	"internity/internal/httpx"
 	"internity/internal/modules/identity"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func int64Ptr(v int64) *int64 { return &v }
+
+// requireAPIErr mirrors content/service_test.go's helper of the same name:
+// asserts err is a *httpx.APIError carrying the given code.
+func requireAPIErr(t *testing.T, err error, code httpx.ErrorCode) {
+	t.Helper()
+	require.Error(t, err)
+	var apiErr *httpx.APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, code, apiErr.Code)
+}
 
 func TestActorInSchool(t *testing.T) {
 	t.Run("nil school_id never matches", func(t *testing.T) {
@@ -48,6 +60,40 @@ func TestCanManageSchool(t *testing.T) {
 	t.Run("student never manages org structure", func(t *testing.T) {
 		student := &identity.User{Role: identity.RoleStudent, SchoolID: int64Ptr(5)}
 		assert.False(t, canManageSchool(student, 5))
+	})
+}
+
+// TestConflictStillReferenced_DeleteBlockerMessages covers the message
+// helpers behind the pre-delete child-count check (DeleteSchool,
+// DeleteDepartment, DeleteCompany): the specific "still has N x using it"
+// conflict message built ahead of attempting the delete, in place of the
+// generic FK-conflict message postgres.TranslateError would otherwise give.
+func TestConflictStillReferenced_DeleteBlockerMessages(t *testing.T) {
+	t.Run("pluralize singular vs plural", func(t *testing.T) {
+		assert.Equal(t, "1 department", pluralize(1, "department", "departments"))
+		assert.Equal(t, "3 departments", pluralize(3, "department", "departments"))
+		assert.Equal(t, "0 departments", pluralize(0, "department", "departments"))
+		assert.Equal(t, "1 company", pluralize(1, "company", "companies"))
+		assert.Equal(t, "2 companies", pluralize(2, "company", "companies"))
+	})
+
+	t.Run("pluralizeIfAny is empty for a zero count", func(t *testing.T) {
+		assert.Equal(t, "", pluralizeIfAny(0, "course", "courses"))
+		assert.Equal(t, "1 course", pluralizeIfAny(1, "course", "courses"))
+		assert.Equal(t, "4 courses", pluralizeIfAny(4, "course", "courses"))
+	})
+
+	t.Run("joinBlockers skips empty clauses and joins the rest with and", func(t *testing.T) {
+		assert.Equal(t, "", joinBlockers("", ""))
+		assert.Equal(t, "2 courses", joinBlockers("2 courses", ""))
+		assert.Equal(t, "3 companies", joinBlockers("", "3 companies"))
+		assert.Equal(t, "2 courses and 3 companies", joinBlockers("2 courses", "3 companies"))
+	})
+
+	t.Run("conflictStillReferenced names the entity and the blocker as a 409", func(t *testing.T) {
+		err := conflictStillReferenced("school", "3 departments")
+		requireAPIErr(t, err, httpx.ErrConflict)
+		assert.Equal(t, "This school still has 3 departments using it — remove or reassign them first", err.Error())
 	})
 }
 

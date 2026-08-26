@@ -66,6 +66,15 @@ func (r *Repository) DeleteSchool(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&School{}, id).Error
 }
 
+// CountDepartmentsBySchool counts departments still pointing at this school —
+// used by the service to pre-check a school delete and name the blocker
+// instead of letting the departments.school_id FK RESTRICT fail generically.
+func (r *Repository) CountDepartmentsBySchool(ctx context.Context, schoolID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&Department{}).Where("school_id = ?", schoolID).Count(&count).Error
+	return count, err
+}
+
 // --- Departments ---
 
 func (r *Repository) ListDepartments(ctx context.Context, schoolID *int64, params httpx.ListParams) ([]Department, int64, error) {
@@ -110,6 +119,21 @@ func (r *Repository) UpdateDepartment(ctx context.Context, d *Department) error 
 
 func (r *Repository) DeleteDepartment(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&Department{}, id).Error
+}
+
+// CountCoursesByDepartment and CountCompaniesByDepartment count a
+// department's two direct child tables — used by the service to pre-check a
+// department delete and name whichever is blocking it.
+func (r *Repository) CountCoursesByDepartment(ctx context.Context, departmentID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&Course{}).Where("department_id = ?", departmentID).Count(&count).Error
+	return count, err
+}
+
+func (r *Repository) CountCompaniesByDepartment(ctx context.Context, departmentID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&Company{}).Where("department_id = ?", departmentID).Count(&count).Error
+	return count, err
 }
 
 // --- Courses ---
@@ -202,6 +226,16 @@ func (r *Repository) UpdateCompany(ctx context.Context, c *Company) error {
 
 func (r *Repository) DeleteCompany(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Delete(&Company{}, id).Error
+}
+
+// CountVacanciesByCompany counts a company's direct child table. Vacancies
+// are owned by the vacancy module, not this one, so this queries the table
+// name directly — same cross-table approach as ResolveCompanyScope below —
+// rather than importing that module's repository just for a count.
+func (r *Repository) CountVacanciesByCompany(ctx context.Context, companyID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Table("vacancies").Where("company_id = ?", companyID).Count(&count).Error
+	return count, err
 }
 
 // CompanyScope is the resolved department/school for a company — used by

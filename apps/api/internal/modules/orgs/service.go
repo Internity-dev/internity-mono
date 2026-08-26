@@ -3,6 +3,8 @@ package orgs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"internity/internal/httpx"
 	"internity/internal/modules/identity"
@@ -68,6 +70,16 @@ func (s *Service) DeleteSchool(ctx context.Context, actor *identity.User, id int
 	if actor.Role != identity.RoleAdmin {
 		return errForbidden
 	}
+	// Pre-check the direct child count so a blocked delete names what's
+	// blocking it, instead of surfacing the generic FK-conflict message
+	// (postgres.TranslateError) after the fact.
+	count, err := s.repo.CountDepartmentsBySchool(ctx, id)
+	if err != nil {
+		return translateWriteErr(err)
+	}
+	if count > 0 {
+		return conflictStillReferenced("school", pluralize(count, "department", "departments"))
+	}
 	return translateWriteErr(s.repo.DeleteSchool(ctx, id))
 }
 
@@ -123,6 +135,22 @@ func (s *Service) DeleteDepartment(ctx context.Context, actor *identity.User, id
 	}
 	if !canManageSchool(actor, existing.SchoolID) {
 		return errForbidden
+	}
+	// A department has two direct child tables (courses, companies) — name
+	// whichever are non-empty rather than only checking one.
+	courseCount, err := s.repo.CountCoursesByDepartment(ctx, id)
+	if err != nil {
+		return translateWriteErr(err)
+	}
+	companyCount, err := s.repo.CountCompaniesByDepartment(ctx, id)
+	if err != nil {
+		return translateWriteErr(err)
+	}
+	if blocker := joinBlockers(
+		pluralizeIfAny(courseCount, "course", "courses"),
+		pluralizeIfAny(companyCount, "company", "companies"),
+	); blocker != "" {
+		return conflictStillReferenced("department", blocker)
 	}
 	return translateWriteErr(s.repo.DeleteDepartment(ctx, id))
 }
@@ -290,6 +318,13 @@ func (s *Service) DeleteCompany(ctx context.Context, actor *identity.User, id in
 	if !canManageSchool(actor, dept.SchoolID) {
 		return errForbidden
 	}
+	count, err := s.repo.CountVacanciesByCompany(ctx, id)
+	if err != nil {
+		return translateWriteErr(err)
+	}
+	if count > 0 {
+		return conflictStillReferenced("company", pluralize(count, "vacancy", "vacancies"))
+	}
 	return translateWriteErr(s.repo.DeleteCompany(ctx, id))
 }
 
@@ -320,6 +355,48 @@ func scopedSchoolFilter(actor *identity.User, requested *int64) (*int64, error) 
 		return nil, errForbidden
 	}
 	return actor.SchoolID, nil
+}
+
+// conflictStillReferenced builds the specific pre-delete conflict message
+// ("This school still has 3 departments using it — remove or reassign them
+// first") named by entity + a pre-rendered child-count clause, in place of
+// the generic message postgres.TranslateError would otherwise produce.
+func conflictStillReferenced(entity, blocker string) error {
+	return httpx.NewError(httpx.ErrConflict, fmt.Sprintf(
+		"This %s still has %s using it — remove or reassign them first", entity, blocker,
+	))
+}
+
+// pluralize renders a child-record count for a conflict message: "1
+// department" for n==1, "3 departments" otherwise.
+func pluralize(n int64, singular, plural string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", singular)
+	}
+	return fmt.Sprintf("%d %s", n, plural)
+}
+
+// pluralizeIfAny is pluralize, but "" when n is zero — so a zero-count child
+// table can be dropped from a multi-table conflict message (see
+// DeleteDepartment) instead of printing "0 courses".
+func pluralizeIfAny(n int64, singular, plural string) string {
+	if n == 0 {
+		return ""
+	}
+	return pluralize(n, singular, plural)
+}
+
+// joinBlockers joins the non-empty child-count clauses with "and", skipping
+// any that were empty (zero count). Returns "" if every clause was empty,
+// meaning nothing blocks the delete.
+func joinBlockers(clauses ...string) string {
+	var parts []string
+	for _, c := range clauses {
+		if c != "" {
+			parts = append(parts, c)
+		}
+	}
+	return strings.Join(parts, " and ")
 }
 
 func translateGetErr(err error) error {
