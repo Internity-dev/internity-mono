@@ -9,9 +9,13 @@ import '@/assets/tour.css'
  * src/tours/*.ts). "Seen" state is a per-viewer localStorage convenience
  * (never authoritative data — losing it just means the tour can replay), so
  * it's fine that it doesn't sync across devices/browsers.
+ *
+ * The dismissal flag is keyed by tourKey *and* userId so a shared browser
+ * profile (e.g. a school lab machine) doesn't let the first account to ever
+ * log in permanently dismiss the tour for every other account that follows.
  */
-export function useTour(tourKey: string, steps: DriveStep[]) {
-  const storageKey = `tour-dismissed:${tourKey}`
+export function useTour(tourKey: string, userId: string, steps: DriveStep[]) {
+  const storageKey = `tour-dismissed:${tourKey}:${userId}`
 
   function hasSeenTour(): boolean {
     try {

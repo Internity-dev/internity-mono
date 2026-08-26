@@ -77,14 +77,14 @@ const avatarSrc = computed(() => avatarUrl(auth.user?.avatar_key))
 // can be replayed anytime from the user menu ("Replay tour" below).
 function replayTour() {
   if (!auth.user) return
-  useTour(auth.user.role, tourStepsForRole(auth.user.role)).start()
+  useTour(auth.user.role, auth.user.id, tourStepsForRole(auth.user.role)).start()
 }
 
 onMounted(() => {
   if (!auth.user) return
   // Let the sidebar/header finish rendering before targeting elements in it.
   requestAnimationFrame(() => {
-    const tour = useTour(auth.user!.role, tourStepsForRole(auth.user!.role))
+    const tour = useTour(auth.user!.role, auth.user!.id, tourStepsForRole(auth.user!.role))
     // The core tour is about to spotlight these — don't immediately
     // re-explain them via a menu hint the moment the user clicks one.
     if (!tour.hasSeenTour()) markHintsSeenFor(coreHintPathsForRole(auth.user!.role))
@@ -133,7 +133,7 @@ watch(
           <Input
             ref="navSearchInput"
             v-model="navFilter"
-            placeholder="Search"
+            placeholder="Filter menu"
             class="h-8 pr-12 pl-8 text-sm"
             @keydown.enter="goToFirstMatch"
           />

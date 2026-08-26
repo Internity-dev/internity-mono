@@ -31,12 +31,12 @@ describe('useTour', () => {
   })
 
   it('hasSeenTour is false before the tour has ever been dismissed', () => {
-    const { hasSeenTour } = useTour('onboarding', steps)
+    const { hasSeenTour } = useTour('onboarding', 'user-1', steps)
     expect(hasSeenTour()).toBe(false)
   })
 
-  it('markSeen persists a per-tour dismissal flag that hasSeenTour then reports', () => {
-    const tour = useTour('onboarding', steps)
+  it('markSeen persists a per-tour-per-user dismissal flag that hasSeenTour then reports', () => {
+    const tour = useTour('onboarding', 'user-1', steps)
     expect(tour.hasSeenTour()).toBe(false)
 
     // start() marks the tour seen only when driver.js reports it was destroyed
@@ -46,12 +46,12 @@ describe('useTour', () => {
     config.onDestroyStarted()
 
     expect(tour.hasSeenTour()).toBe(true)
-    expect(localStorage.getItem('tour-dismissed:onboarding')).toBe('1')
+    expect(localStorage.getItem('tour-dismissed:onboarding:user-1')).toBe('1')
   })
 
   it('scopes the dismissal flag per tourKey', () => {
-    const studentTour = useTour('student', steps)
-    const adminTour = useTour('admin', steps)
+    const studentTour = useTour('student', 'user-1', steps)
+    const adminTour = useTour('admin', 'user-1', steps)
 
     studentTour.start()
     const studentConfig = driverFactory.mock.calls[0]![0]
@@ -61,8 +61,20 @@ describe('useTour', () => {
     expect(adminTour.hasSeenTour()).toBe(false)
   })
 
+  it('scopes the dismissal flag per userId, not just per role (shared browser profile)', () => {
+    const firstStudent = useTour('student', 'user-1', steps)
+    const secondStudent = useTour('student', 'user-2', steps)
+
+    firstStudent.start()
+    const firstConfig = driverFactory.mock.calls[0]![0]
+    firstConfig.onDestroyStarted()
+
+    expect(firstStudent.hasSeenTour()).toBe(true)
+    expect(secondStudent.hasSeenTour()).toBe(false)
+  })
+
   it('start() configures driver.js with the given steps and immediately drives it', () => {
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     tour.start()
 
     expect(driverFactory).toHaveBeenCalledTimes(1)
@@ -74,7 +86,7 @@ describe('useTour', () => {
   })
 
   it('start() destroys the driver instance once onDestroyStarted fires', () => {
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     tour.start()
 
     const config = driverFactory.mock.calls[0]![0]
@@ -84,7 +96,7 @@ describe('useTour', () => {
   })
 
   it('startIfFirstVisit() starts the tour when it has never been seen', () => {
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     tour.startIfFirstVisit()
 
     expect(driverFactory).toHaveBeenCalledTimes(1)
@@ -92,7 +104,7 @@ describe('useTour', () => {
   })
 
   it('startIfFirstVisit() does nothing once the tour has already been dismissed', () => {
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     tour.start()
     const config = driverFactory.mock.calls[0]![0]
     config.onDestroyStarted()
@@ -110,7 +122,7 @@ describe('useTour', () => {
       throw new Error('storage blocked')
     })
 
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     expect(tour.hasSeenTour()).toBe(false)
 
     getItemSpy.mockRestore()
@@ -121,7 +133,7 @@ describe('useTour', () => {
       throw new Error('storage blocked')
     })
 
-    const tour = useTour('onboarding', steps)
+    const tour = useTour('onboarding', 'user-1', steps)
     tour.start()
     const config = driverFactory.mock.calls[0]![0]
 
