@@ -764,8 +764,14 @@ func main() {
 		for _, e := range existingEmailList {
 			existingEmails[e] = true
 		}
+		// Default fallback is 2024001002, not 2024001000: this query runs
+		// before budi/siti are inserted below (they're hardcoded to
+		// 2024001001/2024001002), so on an empty DB the naive MAX()+1 would
+		// collide with budi's NIS the moment this same transaction inserts
+		// them. Once any row exists, MAX() reflects the real data (including
+		// budi/siti themselves) and this fallback is never consulted again.
 		var maxNIS int64
-		if err := tx.WithContext(ctx).Raw(`SELECT COALESCE(MAX(nis::bigint), 2024001000) FROM users WHERE nis ~ '^[0-9]+$'`).Scan(&maxNIS).Error; err != nil {
+		if err := tx.WithContext(ctx).Raw(`SELECT COALESCE(MAX(nis::bigint), 2024001002) FROM users WHERE nis ~ '^[0-9]+$'`).Scan(&maxNIS).Error; err != nil {
 			return fmt.Errorf("max nis: %w", err)
 		}
 		nextNIS := maxNIS + 1
