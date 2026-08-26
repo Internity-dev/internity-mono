@@ -104,7 +104,12 @@ const formSchema = toTypedSchema(
       errorMap: () => ({ message: 'Pick a kind' }),
     }),
     description: z.string().max(500, 'Max 500 characters').optional(),
-    color: z.string().max(20, 'Max 20 characters').optional(),
+    color: z
+      .string()
+      .max(20, 'Max 20 characters')
+      .regex(/^#[0-9a-fA-F]{3,8}$/, 'Must be a hex color like #22c55e')
+      .optional()
+      .or(z.literal('')),
     icon: z.string().max(50, 'Max 50 characters').optional(),
     is_active: z.boolean().optional(),
   }),
@@ -318,7 +323,15 @@ const deleteMutation = useMutation({
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div class="space-y-1.5">
               <Label for="ps-color">Color</Label>
-              <Input id="ps-color" v-model="color" v-bind="colorAttrs" placeholder="#22c55e" />
+              <div class="flex items-center gap-2">
+                <div
+                  class="size-10 shrink-0 rounded-md border"
+                  :style="{ backgroundColor: color || 'transparent' }"
+                  aria-hidden="true"
+                />
+                <Input id="ps-color" v-model="color" v-bind="colorAttrs" placeholder="#22c55e" class="flex-1" />
+              </div>
+              <p v-if="errors.color" class="text-sm text-destructive">{{ errors.color }}</p>
             </div>
             <div class="space-y-1.5">
               <Label for="ps-icon">Icon</Label>

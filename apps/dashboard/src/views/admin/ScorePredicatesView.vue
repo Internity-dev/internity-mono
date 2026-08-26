@@ -83,7 +83,12 @@ const formSchema = toTypedSchema(
     .object({
       name: z.string().min(1, 'Name is required').max(50, 'Max 50 characters'),
       description: z.string().max(500, 'Max 500 characters').optional(),
-      color: z.string().max(20, 'Max 20 characters').optional(),
+      color: z
+        .string()
+        .max(20, 'Max 20 characters')
+        .regex(/^#[0-9a-fA-F]{3,8}$/, 'Must be a hex color like #22c55e')
+        .optional()
+        .or(z.literal('')),
       min: z.coerce.number({ invalid_type_error: 'Min is required' }).min(0).max(100),
       max: z.coerce.number({ invalid_type_error: 'Max is required' }).min(0).max(100),
     })
@@ -284,7 +289,15 @@ const deleteMutation = useMutation({
           </div>
           <div class="space-y-1.5">
             <Label for="sp-color">Color</Label>
-            <Input id="sp-color" v-model="color" v-bind="colorAttrs" placeholder="#22c55e" />
+            <div class="flex items-center gap-2">
+              <div
+                class="size-10 shrink-0 rounded-md border"
+                :style="{ backgroundColor: color || 'transparent' }"
+                aria-hidden="true"
+              />
+              <Input id="sp-color" v-model="color" v-bind="colorAttrs" placeholder="#22c55e" class="flex-1" />
+            </div>
+            <p v-if="errors.color" class="text-sm text-destructive">{{ errors.color }}</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" :disabled="isSaving" @click="dialogOpen = false">Cancel</Button>

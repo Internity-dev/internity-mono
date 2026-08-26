@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { toast } from 'vue-sonner'
 import type { Role } from '@/types/api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -94,6 +95,12 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.meta.guestOnly && auth.isAuthenticated) {
+    // /reset-password carries a one-time token for a specific account — silently
+    // discarding it (like the other guest-only routes do) leaves no clue that the
+    // link didn't work. Explain instead of just bouncing to /dashboard.
+    if (to.name === 'reset-password') {
+      toast.error('You need to log out before using a password reset link for a different account.')
+    }
     return { name: 'dashboard' }
   }
 
