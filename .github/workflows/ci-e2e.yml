@@ -1,0 +1,57 @@
+name: ci-e2e
+
+# Playwright critical-path E2E against the fully composed stack (postgres,
+# redis, minio, api, worker, dashboard). Slow (full docker-compose boot +
+# browser install), so this runs on demand / nightly rather than on every PR
+# — see the plan's Phase 8 CI design.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *" # 01:00 WIB
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure environment
+        run: cp .env.example .env
+
+      - name: Start the stack
+        run: docker compose --project-directory . --env-file .env -f deploy/docker-compose.yml up -d --build
+
+      - name: Wait for the API to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/readyz > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "API never became healthy" >&2
+          docker compose --project-directory . --env-file .env -f deploy/docker-compose.yml logs
+          exit 1
+
+      - name: Seed demo data
+        run: cd apps/api && go run ./cmd/seed
+        env:
+          DATABASE_URL: postgres://internity:internity@localhost:5432/internity?sslmode=disable
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @internity/e2e exec playwright install --with-deps chromium
+      - run: pnpm --filter @internity/e2e run test
+        env:
+          E2E_BASE_URL: http://localhost:5173
+
+      - name: Compose logs (on failure)
+        if: failure()
+        run: docker compose --project-directory . --env-file .env -f deploy/docker-compose.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose --project-directory . --env-file .env -f deploy/docker-compose.yml down -v

@@ -1,0 +1,17 @@
+{
+  "name": "@internity/design-tokens",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "tokens.json"
+  ],
+  "exports": {
+    "./theme.css": "./dist/theme.css",
+    "./tokens.json": "./tokens.json"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  }
+}

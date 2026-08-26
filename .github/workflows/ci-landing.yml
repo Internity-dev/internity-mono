@@ -1,0 +1,21 @@
+name: ci-landing
+
+on:
+  push:
+    paths: ["apps/landing/**", "packages/design-tokens/**", ".github/workflows/ci-landing.yml"]
+  pull_request:
+    paths: ["apps/landing/**", "packages/design-tokens/**", ".github/workflows/ci-landing.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @internity/landing run typecheck
+      - run: pnpm --filter @internity/landing run generate

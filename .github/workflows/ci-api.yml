@@ -1,0 +1,23 @@
+name: ci-api
+
+on:
+  push:
+    paths: ["apps/api/**", ".github/workflows/ci-api.yml"]
+  pull_request:
+    paths: ["apps/api/**", ".github/workflows/ci-api.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
+      - run: go test ./... -race -cover

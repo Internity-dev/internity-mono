@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="id" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Typography picker: Internity</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Unbounded:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Outfit:wght@400;500;600;700;800&family=Lexend:wght@400;500;600;700&family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --fg: #171b26;
+      --card: #ffffff;
+      --card-fg: #171b26;
+      --primary: #0065ab;
+      --primary-fg: #ffffff;
+      --muted: #eef0f4;
+      --muted-fg: #717a8f;
+      --border: #dfe3ea;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: blur(12px);
+      background: color-mix(in oklch, var(--bg) 85%, transparent);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+    .topbar .hint { font-size: 13px; opacity: 0.66; margin: 0; }
+    .topbar .toggle {
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .topbar .toggle:hover { background: color-mix(in oklch, var(--fg) 6%, transparent); }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+      display: grid;
+      gap: 32px;
+    }
+
+    .pair {
+      border-radius: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 28px 32px;
+      color: var(--card-fg);
+    }
+
+    .pair-header {
+      display: flex; align-items: baseline; gap: 12px;
+      margin-bottom: 20px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+    .pair-number {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 999px;
+      background: var(--primary); color: var(--primary-fg);
+      font-weight: 600; font-size: 13px;
+      flex-shrink: 0;
+    }
+    .pair-name { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+    .pair-fonts { margin-left: auto; font-size: 12px; opacity: 0.66; font-variant: all-small-caps; letter-spacing: 0.06em; }
+
+    .sample-display {
+      font-family: var(--pair-sans);
+      font-size: 36px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin: 0 0 16px;
+    }
+    .sample-h1 {
+      font-family: var(--pair-sans);
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      margin: 0 0 8px;
+    }
+    .sample-body {
+      font-family: var(--pair-sans);
+      font-size: 14px;
+      line-height: 1.55;
+      margin: 0 0 16px;
+      opacity: 0.88;
+    }
+    .sample-caption {
+      font-family: var(--pair-sans);
+      font-size: 11px;
+      opacity: 0.62;
+      letter-spacing: 0.02em;
+      margin: 0 0 12px;
+      text-transform: uppercase;
+    }
+    .sample-number {
+      font-family: var(--pair-mono);
+      font-size: 24px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      margin: 0;
+    }
+    .sample-mono {
+      font-family: var(--pair-mono);
+      font-size: 12px;
+      opacity: 0.78;
+      margin: 6px 0 0;
+      letter-spacing: 0;
+    }
+
+    .sample-button {
+      font-family: var(--pair-sans);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 16px;
+      background: var(--primary);
+      color: var(--primary-fg);
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    .sample-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+    @media (max-width: 720px) { .sample-grid { grid-template-columns: 1fr; } }
+
+    .sample-card {
+      padding: 14px 16px;
+      background: color-mix(in oklch, var(--fg) 6%, transparent);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .footer-cta {
+      text-align: center;
+      padding: 24px;
+      opacity: 0.72;
+      font-size: 14px;
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--fg);
+    }
+    .footer-cta code {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      background: color-mix(in oklch, var(--fg) 10%, transparent);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>Typography picker: Internity</h1>
+      <p class="hint">Dirender di atas tema kita (biru dari logo asli)</p>
+    </div>
+    <button class="toggle" id="theme-toggle">Switch to Dark</button>
+  </div>
+
+  <div class="container">
+
+    <article class="pair" style="--pair-sans: 'Space Grotesk', system-ui, sans-serif; --pair-mono: 'Space Mono', ui-monospace, monospace;">
+      <header class="pair-header">
+        <span class="pair-number">1</span>
+        <h2 class="pair-name">Space Grotesk + Space Mono</h2>
+        <span class="pair-fonts">quirky · bold · indie-tech</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="pair" style="--pair-sans: 'Unbounded', system-ui, sans-serif; --pair-mono: 'JetBrains Mono', ui-monospace, monospace;">
+      <header class="pair-header">
+        <span class="pair-number">2</span>
+        <h2 class="pair-name">Unbounded + JetBrains Mono</h2>
+        <span class="pair-fonts">super bold · rounded · loud</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="pair" style="--pair-sans: 'Bricolage Grotesque', system-ui, sans-serif; --pair-mono: 'JetBrains Mono', ui-monospace, monospace;">
+      <header class="pair-header">
+        <span class="pair-number">3</span>
+        <h2 class="pair-name">Bricolage Grotesque + JetBrains Mono</h2>
+        <span class="pair-fonts">trendy 2025 startup · karakter kuat</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="pair" style="--pair-sans: 'Outfit', system-ui, sans-serif; --pair-mono: 'JetBrains Mono', ui-monospace, monospace;">
+      <header class="pair-header">
+        <span class="pair-number">4</span>
+        <h2 class="pair-name">Outfit + JetBrains Mono</h2>
+        <span class="pair-fonts">rounded · friendly · app-native</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="pair" style="--pair-sans: 'Lexend', system-ui, sans-serif; --pair-mono: 'JetBrains Mono', ui-monospace, monospace;">
+      <header class="pair-header">
+        <span class="pair-number">5</span>
+        <h2 class="pair-name">Lexend + JetBrains Mono</h2>
+        <span class="pair-fonts">rounded · lega · gampang dibaca</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="pair" style="--pair-sans: 'Sora', system-ui, sans-serif; --pair-mono: 'Inter', system-ui, sans-serif;">
+      <header class="pair-header">
+        <span class="pair-number">6</span>
+        <h2 class="pair-name">Sora (full, headline + body)</h2>
+        <span class="pair-fonts">display font kita sekarang, dipake full</span>
+      </header>
+      <h1 class="sample-display">128 Siswa Aktif</h1>
+      <h2 class="sample-h1">Internity</h2>
+      <p class="sample-body">Aplikasi manajemen PKL untuk sekolah, siswa, dan perusahaan mitra dalam satu tempat.</p>
+      <div class="sample-grid">
+        <div>
+          <p class="sample-caption">Perusahaan mitra</p>
+          <p class="sample-number">24</p>
+          <p class="sample-mono">SMKN 1 Cibinong</p>
+          <button class="sample-button">Tinjau lamaran</button>
+        </div>
+        <div class="sample-card">
+          <p class="sample-caption">Lamaran diterima</p>
+          <p class="sample-number" style="font-size: 18px;">89%</p>
+          <p class="sample-mono">2 menit lalu</p>
+        </div>
+      </div>
+    </article>
+
+    <div class="footer-cta">
+      Pilih satu: ketik <code>1</code> sampai <code>6</code> di chat.<br />
+      Gak yakin? Ketik <code>skip</code>, default ke <strong>Inter + JetBrains Mono</strong>.
+    </div>
+  </div>
+
+  <script>
+    const root = document.documentElement;
+    const btn = document.getElementById('theme-toggle');
+    const darkTokens = `--bg: #0d0f16; --fg: #eef0f4; --card: #262b3a; --card-fg: #eef0f4; --primary: #63b3f1; --primary-fg: #0d0f16; --muted: #262b3a; --muted-fg: #98a1b3; --border: #3d4457;`;
+    const lightTokens = `--bg: #f7f8fa; --fg: #171b26; --card: #ffffff; --card-fg: #171b26; --primary: #0065ab; --primary-fg: #ffffff; --muted: #eef0f4; --muted-fg: #717a8f; --border: #dfe3ea;`;
+    function applyTokens(theme) {
+      const styleEl = document.getElementById('palette-tokens') || (() => {
+        const s = document.createElement('style');
+        s.id = 'palette-tokens';
+        document.head.appendChild(s);
+        return s;
+      })();
+      styleEl.textContent = `:root { ${theme === 'dark' ? darkTokens : lightTokens} }`;
+    }
+    btn.addEventListener('click', () => {
+      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      btn.textContent = next === 'dark' ? 'Switch to Light' : 'Switch to Dark';
+      applyTokens(next);
+    });
+  </script>
+</body>
+</html>

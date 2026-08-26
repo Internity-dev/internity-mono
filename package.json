@@ -1,0 +1,25 @@
+{
+  "name": "internity",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Internity — SMK PKL/internship management platform (monorepo)",
+  "scripts": {
+    "dev": "concurrently -n api,dashboard,landing -c blue,green,magenta \"pnpm:api:dev\" \"pnpm:dashboard:dev\" \"pnpm:landing:dev\"",
+    "api:dev": "cd apps/api && go run ./cmd/api",
+    "dashboard:dev": "pnpm --filter @internity/dashboard dev",
+    "landing:dev": "pnpm --filter @internity/landing dev",
+    "dashboard:build": "pnpm --filter @internity/dashboard build",
+    "landing:build": "pnpm --filter @internity/landing build",
+    "tokens:build": "pnpm --filter @internity/design-tokens build",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.32.1"
+}

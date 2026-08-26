@@ -1,0 +1,22 @@
+name: ci-dashboard
+
+on:
+  push:
+    paths: ["apps/dashboard/**", "packages/design-tokens/**", ".github/workflows/ci-dashboard.yml"]
+  pull_request:
+    paths: ["apps/dashboard/**", "packages/design-tokens/**", ".github/workflows/ci-dashboard.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @internity/dashboard run type-check
+      - run: pnpm --filter @internity/dashboard run test:unit -- --run
+      - run: pnpm --filter @internity/dashboard run build

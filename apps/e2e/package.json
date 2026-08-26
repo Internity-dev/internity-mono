@@ -1,0 +1,21 @@
+{
+  "name": "@internity/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright critical-path E2E suite — runs against the composed docker-compose stack (see root Makefile's test-e2e target).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:list": "playwright test --list",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.13.3",
+    "typescript": "~6.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

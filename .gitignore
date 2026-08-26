@@ -1,0 +1,36 @@
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Take-home instructions PDF (not part of the submission source)
+Take Home Test Fullstack - PT Mumtaz Teknologi Indonesia.pdf
+
+# Node
+node_modules/
+.pnpm-store/
+dist/
+.output/
+.nuxt/
+.nitro/
+.cache/
+*.local
+
+# Go
+apps/api/bin/
+apps/api/tmp/
+apps/api/coverage.out
+apps/api/coverage.html
+
+# Editors/OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker volumes (bind-mounted local data, not code)
+deploy/.data/
+
+# Logs
+*.log

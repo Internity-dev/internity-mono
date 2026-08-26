@@ -1,0 +1,3551 @@
+openapi: 3.1.0
+info:
+  title: Internity API
+  version: 1.0.0
+  description: |
+    Internity is a school internship (PKL — Praktik Kerja Lapangan) management system.
+    It coordinates the full lifecycle of a student's internship: browsing and applying to
+    company-posted vacancies, the accept/reject workflow, day-to-day attendance and journal
+    tracking once placed, mentor/coordinator scoring, certificate generation, coordinator
+    site-visit monitoring, company/mentor reviews, and school/department/company/course
+    org-structure administration.
+
+    ## Response envelope
+    Every JSON response (except binary downloads, see below) uses one consistent envelope.
+
+    Success:
+    ```json
+    { "success": true, "data": { ... }, "message": "OK", "meta": { "request_id": "...", "pagination": null } }
+    ```
+
+    Error:
+    ```json
+    { "success": false, "data": null, "message": "...", "error": { "code": "VALIDATION_ERROR", "details": [] }, "meta": { "request_id": "..." } }
+    ```
+
+    `error.code` is one of `BAD_REQUEST` (400), `VALIDATION_ERROR` (422), `UNAUTHENTICATED` (401),
+    `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `RATE_LIMITED` (429), `INTERNAL_ERROR` (500).
+
+    A small number of endpoints intentionally return **no body at all** — `204 No Content`
+    (every `DELETE`, plus unsave-vacancy) — these are called out explicitly rather than
+    documented as an empty envelope. Certificate and export endpoints stream raw
+    `application/pdf` / `.xlsx` bytes, not the envelope.
+
+    ## Authentication
+    Sessions are cookie-based: a successful login/register/refresh sets an httpOnly
+    `internity_session` cookie (short-lived access token) and an httpOnly `internity_refresh`
+    cookie (scoped to `/api/v1/auth/refresh`). Every authenticated endpoint below requires the
+    `internity_session` cookie.
+
+    ## CSRF
+    Login/register also set a **non-httpOnly** `internity_csrf` cookie so the frontend JS can
+    read it. Every mutating request (`POST`/`PUT`/`PATCH`/`DELETE`) on an authenticated route
+    must echo that cookie's value back as the `X-CSRF-Token` header (double-submit pattern) —
+    a cross-site request can trigger the cookie to be sent automatically, but cannot read its
+    value to forge the header. Requests missing or mismatching this header receive
+    `403 FORBIDDEN`. Endpoints that only require this header are marked below.
+  contact:
+    name: Internity API
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+tags:
+  - name: Auth
+    description: Session login/registration/refresh, profile, password, avatar, and invite codes.
+  - name: Organizations
+    description: The School -> Department -> Course/Company hierarchy.
+  - name: Users
+    description: The cross-school user directory (admin/coordinator only) and RBAC status-breakdown analytics.
+  - name: Vacancies
+    description: Company-posted internship vacancies, saved vacancies, and the appliance (application) state machine.
+  - name: Internship
+    description: The placement lifecycle after an appliance is accepted — dates, presence/attendance, and journals.
+  - name: Scoring
+    description: Mentor/coordinator scores, per-school score-predicate bands, and certificate generation.
+  - name: Content
+    description: News announcements and FAQs, with a public read surface.
+  - name: Reviews
+    description: Coordinator site-visit monitoring logs, review questionnaire templates, and mentor/student/company reviews.
+  - name: Reporting
+    description: Excel export endpoints.
+  - name: Notifications
+    description: The in-app notification inbox.
+  - name: Health
+    description: Infrastructure health checks (outside the `/api/v1` prefix, no envelope).
+security:
+  - cookieAuth: []
+paths:
+  # ============================== AUTH ==============================
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password
+      description: >
+        Public endpoint — no cookie required. On success, sets the `internity_session`,
+        `internity_refresh`, and `internity_csrf` cookies.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { email: "student@example.sch.id", password: "correct-horse-battery" }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+              example:
+                success: true
+                message: "Login successful"
+                meta: { request_id: "b1f2..." }
+                data:
+                  user: { id: "b3c1e2a0-...", role: "student", name: "Ayu Lestari", email: "student@example.sch.id", is_active: true, created_at: "2026-01-10T02:00:00Z" }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "Invalid email or password", error: { code: "UNAUTHENTICATED" }, meta: {} }
+        '403':
+          description: Account deactivated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Self-register a new student account via invite code
+      description: >
+        Public endpoint. Resolves the invite code to a course (which implies department +
+        school), creates a `student` account, and immediately logs the user in (sets the same
+        three cookies as `/auth/login`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            example:
+              name: "Ayu Lestari"
+              email: "ayu@example.sch.id"
+              password: "correct-horse-battery"
+              password_confirmation: "correct-horse-battery"
+              invite_code: "SMK-2026-XA"
+      responses:
+        '201':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '409':
+          description: An account with this email already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '422':
+          description: Validation failed (password mismatch, or invite code invalid/expired)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate the session using the refresh cookie
+      description: >
+        Public endpoint (reads the `internity_refresh` cookie itself, not the CSRF/session
+        cookie). Reuse of an already-rotated refresh token is treated as theft evidence and
+        revokes every session in that token family, forcing a full re-login.
+      security: []
+      responses:
+        '200':
+          description: Session refreshed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+        '401':
+          description: Missing, invalid, or reused/expired refresh token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "Session expired, please log in again", error: { code: "UNAUTHENTICATED" }, meta: {} }
+        '403':
+          description: Account deactivated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset email
+      description: >
+        Public endpoint. Always returns 200 with a generic message regardless of whether the
+        email is registered, to avoid leaking account existence.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+      responses:
+        '200':
+          description: Generic acknowledgement (email may or may not exist)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "If that email is registered, a reset link has been sent", meta: {} }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password using a reset token
+      description: Public endpoint. The token is the one emailed by `/auth/forgot-password`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '200':
+          description: Password reset — client should log in again
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "Password reset. Please log in again.", meta: {} }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '422':
+          description: Password confirmation mismatch, or token invalid/expired/already used
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out and clear session cookies
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Logged out (idempotent — succeeds even if the session was already invalid)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "Logged out", meta: {} }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current authenticated user
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+  /change-profile:
+    put:
+      tags: [Auth]
+      summary: Update the current user's profile fields
+      description: Partial update — every field is optional; omitted fields are left unchanged.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeProfileRequest' }
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /change-password:
+    put:
+      tags: [Auth]
+      summary: Change the current user's password
+      description: On success, clears session cookies — the client must log in again.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '200':
+          description: Password changed — client should log in again
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "Password changed. Please log in again.", meta: {} }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Password confirmation mismatch, or current password incorrect
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /avatars:
+    post:
+      tags: [Auth]
+      summary: Upload/replace the current user's avatar
+      description: Image only, max 5 MiB (enforced server-side).
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar: { type: string, format: binary, description: Image file, max 5 MiB. }
+      responses:
+        '200':
+          description: Avatar updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/UserWrapper' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing file, or file is not a valid/allowed image, or exceeds size limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /invite-codes:
+    post:
+      tags: [Auth]
+      summary: Create a student self-registration invite code
+      description: >
+        Restricted to `admin` (any course) or `coordinator` (only a course within their own
+        school).
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInviteCodeRequest' }
+      responses:
+        '201':
+          description: Invite code created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/InviteCode' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Course not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  # ========================== USERS ==========================
+  /users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: >
+        Restricted to `admin` (sees every school) and `coordinator` (forced to their own
+        `school_id` regardless of the `school_id` query param — this covers coordinators and
+        students at that school; mentors, being scoped by `company_id` rather than `school_id`,
+        are not yet included in a coordinator's view here). `mentor` and `student` get `403`.
+        Never returns `password_hash`.
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema: { type: string, enum: [admin, coordinator, mentor, student] }
+        - name: school_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - name: department_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - name: company_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/UserSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of users
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/UserResponse' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+
+  # ========================== ORGANIZATIONS ==========================
+  /schools:
+    get:
+      tags: [Organizations]
+      summary: List schools
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OrgSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of schools
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/School' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+    post:
+      tags: [Organizations]
+      summary: Create a school
+      description: Restricted to `admin`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSchoolRequest' }
+      responses:
+        '201':
+          description: School created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/School' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /schools/{id}:
+    get:
+      tags: [Organizations]
+      summary: Get a school by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The school
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/School' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Organizations]
+      summary: Update a school
+      description: >
+        Partial update. Restricted to `admin`, or a `coordinator` scoped to this school.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchoolPatch' }
+      responses:
+        '200':
+          description: School updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/School' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Organizations]
+      summary: Delete a school
+      description: Restricted to `admin`. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /departments:
+    get:
+      tags: [Organizations]
+      summary: List departments
+      parameters:
+        - name: school_id
+          in: query
+          required: false
+          description: Filter to a specific school.
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OrgSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of departments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Department' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+    post:
+      tags: [Organizations]
+      summary: Create a department
+      description: Restricted to `admin`, or a `coordinator` scoped to the target school.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDepartmentRequest' }
+      responses:
+        '201':
+          description: Department created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Department' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /departments/{id}:
+    get:
+      tags: [Organizations]
+      summary: Get a department by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The department
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Department' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Organizations]
+      summary: Update a department
+      description: Partial update. Restricted to `admin`, or a `coordinator` scoped to this department's school.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentPatch' }
+      responses:
+        '200':
+          description: Department updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Department' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Organizations]
+      summary: Delete a department
+      description: Restricted to `admin`, or a `coordinator` scoped to this department's school. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /courses:
+    get:
+      tags: [Organizations]
+      summary: List courses
+      parameters:
+        - name: department_id
+          in: query
+          required: false
+          description: Filter to a specific department.
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OrgSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of courses
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Course' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+    post:
+      tags: [Organizations]
+      summary: Create a course
+      description: Restricted to `admin`, or a `coordinator`/`mentor` scoped to the target department's school.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCourseRequest' }
+      responses:
+        '201':
+          description: Course created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Course' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /courses/{id}:
+    get:
+      tags: [Organizations]
+      summary: Get a course by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The course
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Course' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Organizations]
+      summary: Update a course
+      description: Partial update. Restricted to `admin`, or a `coordinator` scoped to this course's school.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CoursePatch' }
+      responses:
+        '200':
+          description: Course updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Course' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Organizations]
+      summary: Delete a course
+      description: Restricted to `admin`, or a `coordinator` scoped to this course's school. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /companies:
+    get:
+      tags: [Organizations]
+      summary: List companies
+      parameters:
+        - name: department_id
+          in: query
+          required: false
+          description: Filter to companies associated with a specific department.
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/OrgSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of companies
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Company' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+    post:
+      tags: [Organizations]
+      summary: Create a company
+      description: Restricted to `admin`, or a `coordinator`/`mentor` scoped to the target department's school.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCompanyRequest' }
+      responses:
+        '201':
+          description: Company created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Company' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /companies/{id}:
+    get:
+      tags: [Organizations]
+      summary: Get a company by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The company
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Company' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Organizations]
+      summary: Update a company
+      description: Partial update. Restricted to `admin`, or a `coordinator`/`mentor` scoped to this company.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompanyPatch' }
+      responses:
+        '200':
+          description: Company updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Company' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Organizations]
+      summary: Delete a company
+      description: Restricted to `admin`. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+
+  # ============================ VACANCIES ============================
+  /vacancies:
+    get:
+      tags: [Vacancies]
+      summary: List vacancies
+      parameters:
+        - name: company_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - name: department_id
+          in: query
+          required: false
+          description: Filter to vacancies posted by companies associated with a department.
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/VacancySort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of vacancies
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Vacancy' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+    post:
+      tags: [Vacancies]
+      summary: Create a vacancy
+      description: >
+        Restricted to a role that can manage the target company (`admin`, the `mentor`
+        belonging to that company, or a `coordinator` scoped to its school). `slots` defaults
+        to 1 if omitted or less than 1; new vacancies always start `open`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateVacancyRequest' }
+            example: { company_id: 12, name: "Frontend Intern", category: "Software Engineering", slots: 3 }
+      responses:
+        '201':
+          description: Vacancy created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Vacancy' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /vacancies/status-counts:
+    get:
+      tags: [Vacancies]
+      summary: Vacancy counts grouped by status
+      description: >
+        Restricted to `admin`. Backs the admin dashboard's status-breakdown chart. Every known
+        status (`open`, `closed`) is present in the result even at zero. Cached in Redis for 60s.
+      responses:
+        '200':
+          description: Counts by status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties: { open: { type: integer }, closed: { type: integer } }
+              example: { success: true, message: "OK", meta: {}, data: { open: 11, closed: 3 } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+  /vacancies/{id}:
+    get:
+      tags: [Vacancies]
+      summary: Get a vacancy by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The vacancy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Vacancy' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Vacancies]
+      summary: Update a vacancy
+      description: Partial update, including opening/closing it via `status`. Restricted to a role that can manage this vacancy's company.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VacancyPatch' }
+      responses:
+        '200':
+          description: Vacancy updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Vacancy' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Vacancies]
+      summary: Delete a vacancy
+      description: Restricted to a role that can manage this vacancy's company. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /vacancies/{id}/save:
+    post:
+      tags: [Vacancies]
+      summary: Bookmark a vacancy
+      description: Restricted to `student`.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Vacancy saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "Vacancy saved", meta: {} }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409': { description: Already saved, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    delete:
+      tags: [Vacancies]
+      summary: Remove a bookmarked vacancy
+      description: Restricted to `student`. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Removed — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /vacancies/{id}/appliances:
+    get:
+      tags: [Vacancies]
+      summary: List appliances submitted against a vacancy
+      description: Restricted to a role that can manage this vacancy's company.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/ApplianceSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of appliances for this vacancy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Appliance' } } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /saved-vacancies:
+    get:
+      tags: [Vacancies]
+      summary: List the current user's bookmarked vacancies
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/VacancySort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of saved vacancies
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/SavedVacancy' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+  /appliances:
+    get:
+      tags: [Vacancies]
+      summary: List the current user's own appliances
+      description: Restricted to `student` — returns only the caller's own applications.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/ApplianceSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of the caller's appliances
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Appliance' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+    post:
+      tags: [Vacancies]
+      summary: Apply to a vacancy
+      description: >
+        Restricted to `student`. The vacancy must be `open` and belong to the same department
+        as the applicant (`409 CONFLICT` otherwise). Creates an appliance in `pending` status.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplyRequest' }
+            example: { vacancy_id: 42, message: "I'd love to work on your mobile team." }
+      responses:
+        '201':
+          description: Application submitted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Appliance' } }
+              example:
+                success: true
+                message: "Application submitted"
+                meta: {}
+                data: { id: 501, user_id: "b3c1e2a0-...", vacancy_id: 42, status: "pending", message: "I'd love to work on your mobile team.", created_at: "2026-08-22T03:00:00Z", updated_at: "2026-08-22T03:00:00Z" }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403':
+          description: Caller is not a student, has no department on record, or the vacancy is not available to their department
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: The vacancy is no longer open
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "This vacancy is no longer open", error: { code: "CONFLICT" }, meta: {} }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /appliances/status-counts:
+    get:
+      tags: [Vacancies]
+      summary: Appliance counts grouped by status
+      description: >
+        Restricted to `admin`. Backs the admin dashboard's status-breakdown chart. Every known
+        status is present in the result even at zero, unscoped across all schools. Cached in
+        Redis for 60s. A correctly school-scoped version for coordinators isn't implemented yet.
+      responses:
+        '200':
+          description: Counts by status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          pending: { type: integer }
+                          processed: { type: integer }
+                          accepted: { type: integer }
+                          rejected: { type: integer }
+                          canceled: { type: integer }
+              example: { success: true, message: "OK", meta: {}, data: { pending: 38, processed: 37, accepted: 113, rejected: 37, canceled: 25 } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+  /appliances/{id}/cancel:
+    put:
+      tags: [Vacancies]
+      summary: Cancel an appliance
+      description: Only the student who submitted the appliance may cancel it. Must currently be `pending` or `processed`.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Application canceled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Appliance' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Appliance is already in a terminal state (accepted/rejected/canceled)
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /appliances/{id}/process:
+    put:
+      tags: [Vacancies]
+      summary: Mark an appliance as under review
+      description: Restricted to a role that can manage the appliance's vacancy's company. Must currently be `pending`.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Application marked as under review
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Appliance' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Invalid state transition
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /appliances/{id}/accept:
+    put:
+      tags: [Vacancies]
+      summary: Accept an appliance
+      description: >
+        Restricted to a role that can manage the appliance's vacancy's company. Must be
+        transitionable to `accepted` (from `pending` or `processed`), **and** the vacancy must
+        still have a free slot — `accepted_count < vacancy.slots`, checked at accept time, not
+        reserved in advance. On success, hands off to the internship module to create an
+        unscheduled `intern_dates` placement row for the student.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Application accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Appliance' } }
+              example:
+                success: true
+                message: "Application accepted"
+                meta: {}
+                data: { id: 501, user_id: "b3c1e2a0-...", vacancy_id: 42, status: "accepted", message: null, created_at: "2026-08-22T03:00:00Z", updated_at: "2026-08-22T04:00:00Z" }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Invalid state transition, or no slots remaining for this vacancy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "No slots remaining for this vacancy", error: { code: "CONFLICT" }, meta: {} }
+  /appliances/{id}/reject:
+    put:
+      tags: [Vacancies]
+      summary: Reject an appliance
+      description: >
+        Restricted to a role that can manage the appliance's vacancy's company. Must be
+        transitionable to `rejected` (from `pending` or `processed`). Rejected is terminal — no
+        further transitions or cleanup are needed.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Application rejected
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Appliance' } }
+              example:
+                success: true
+                message: "Application rejected"
+                meta: {}
+                data: { id: 501, user_id: "b3c1e2a0-...", vacancy_id: 42, status: "rejected", message: null, created_at: "2026-08-22T03:00:00Z", updated_at: "2026-08-22T04:00:00Z" }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Invalid state transition
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+
+  # =========================== INTERNSHIP ============================
+  /internships/mine:
+    get:
+      tags: [Internship]
+      summary: List the current user's own internship placements
+      responses:
+        '200':
+          description: The caller's intern-date placements (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/InternDate' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+  /internships/{id}:
+    get:
+      tags: [Internship]
+      summary: Get an internship placement by ID
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: The placement
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/InternDate' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /internships/{id}/dates:
+    put:
+      tags: [Internship]
+      summary: Set/extend the schedule for a placement
+      description: >
+        Sets `start_date`/`end_date` (and optionally `extended_until`). Uses **optimistic
+        locking**: the caller must pass the placement's current `expected_version` (from a
+        prior GET), which is compared against the stored `version` — a mismatch means someone
+        else modified the row first, and the request is rejected with `409 CONFLICT` rather
+        than silently overwriting. The placement must not already be `completed`, `start_date`
+        must be before `end_date`, and the new range must not overlap another placement for
+        the same student.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetDatesRequest' }
+            example: { start_date: "2026-09-01", end_date: "2026-11-30", expected_version: 1 }
+      responses:
+        '200':
+          description: Dates updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/InternDate' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: >
+            Placement already completed, the version doesn't match the current row (someone
+            else updated it first — reload and retry), or the new range overlaps another
+            placement
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "This record was changed by someone else — please reload and try again", error: { code: "CONFLICT" }, meta: {} }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /internships/{id}/complete:
+    put:
+      tags: [Internship]
+      summary: Mark a placement completed
+      description: Uses the placement's current version internally for the optimistic-lock write; must not already be `completed`.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Placement marked completed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/InternDate' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Already completed, or was concurrently modified
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /internships/{id}/attendance-summary:
+    get:
+      tags: [Internship]
+      summary: Get a day-by-day attendance summary for a placement's month
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - name: month
+          in: query
+          required: false
+          description: Month to summarize, `YYYY-MM`. Defaults to the current month.
+          schema: { type: string, pattern: '^\d{4}-\d{2}$' }
+          example: "2026-09"
+      responses:
+        '200':
+          description: One entry per day in the requested month
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/AttendanceDay' } } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422':
+          description: Invalid `month` format
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /presence-statuses:
+    get:
+      tags: [Internship]
+      summary: List presence statuses configured for a school
+      parameters:
+        - name: school_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Presence statuses (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/PresenceStatus' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '422':
+          description: Missing/invalid `school_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    post:
+      tags: [Internship]
+      summary: Create a presence status
+      description: A school-scoped, configurable attendance category (e.g. "Present", "Sick", "Holiday") used by check-in/excuse/journal flows.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePresenceStatusRequest' }
+      responses:
+        '201':
+          description: Presence status created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/PresenceStatus' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /presence-statuses/{id}:
+    put:
+      tags: [Internship]
+      summary: Update a presence status
+      description: Partial update.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PresenceStatusPatch' }
+      responses:
+        '200':
+          description: Presence status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/PresenceStatus' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Internship]
+      summary: Delete a presence status
+      description: Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /presences:
+    get:
+      tags: [Internship]
+      summary: List the current user's own presence records at a company
+      parameters:
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/DateSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated presence records
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Presence' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /presences/status-counts:
+    get:
+      tags: [Internship]
+      summary: Presence counts grouped by kind
+      description: >
+        Restricted to `admin`. Backs the admin dashboard's attendance-breakdown chart. Defaults
+        to the current calendar month (presences is the fastest-growing table in the schema, so
+        an unbounded all-time query would only get slower); pass `from`/`to` for a different
+        period. Every known kind is present in the result even at zero, unscoped across all
+        schools. Cached in Redis for 60s (per date range).
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: 'Inclusive range start, `YYYY-MM-DD`. Defaults to the 1st of the current month.'
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: false
+          description: 'Inclusive range end, `YYYY-MM-DD`. Defaults to today.'
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Counts by kind
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          present: { type: integer }
+                          permitted: { type: integer }
+                          sick: { type: integer }
+                          absent: { type: integer }
+                          holiday: { type: integer }
+              example: { success: true, message: "OK", meta: {}, data: { present: 664, permitted: 102, sick: 92, absent: 87, holiday: 0 } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+  /presences/pending-approval:
+    get:
+      tags: [Internship]
+      summary: List presence records at a company awaiting mentor/coordinator approval
+      description: Restricted to mentor/coordinator/admin roles able to manage this company.
+      parameters:
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/DateSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated unapproved presence records
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Presence' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /presences/check-in:
+    post:
+      tags: [Internship]
+      summary: Check in for today at a company
+      description: >
+        Restricted to `student`. The placement at this company must be currently active
+        (today within its scheduled range) and the school must have a "present" presence
+        status configured, or this fails with `409 CONFLICT`. Creates today's presence row
+        on the fly — rows are never pre-materialized for future days. Only one check-in per
+        day is allowed (a second attempt on the same day is `409 CONFLICT`).
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [company_id]
+              properties:
+                company_id: { type: integer, format: int64 }
+                lat: { type: number, description: Optional check-in latitude. }
+                lng: { type: number, description: Optional check-in longitude. }
+                photo: { type: string, format: binary, description: Optional check-in selfie/photo (image only). }
+      responses:
+        '201':
+          description: Checked in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Presence' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '409':
+          description: Placement not currently active, school has no "present" status configured, or already checked in today
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "You've already reported attendance for today", error: { code: "CONFLICT" }, meta: {} }
+        '422':
+          description: Missing/invalid `company_id`, or photo failed image validation
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /presences/check-out:
+    post:
+      tags: [Internship]
+      summary: Check out for today at a company
+      description: Restricted to `student`. Must have already checked in today, and not already checked out.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckOutRequest' }
+      responses:
+        '200':
+          description: Checked out
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Presence' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '409':
+          description: Not checked in yet today, or already checked out
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "Check in before checking out", error: { code: "CONFLICT" }, meta: {} }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /presences/excuse:
+    post:
+      tags: [Internship]
+      summary: File a permitted/sick excuse for a date
+      description: >
+        Restricted to `student`. `kind` must be `permitted` or `sick` (not any other
+        presence-status kind). The date must fall within the placement's active range, and the
+        school must have that kind of presence status configured. Creates the presence row for
+        that date on the fly; one record per date (a second submission for the same date is
+        `409 CONFLICT`).
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [company_id, date, kind, description]
+              properties:
+                company_id: { type: integer, format: int64 }
+                date: { type: string, format: date, example: "2026-09-10" }
+                kind: { type: string, enum: [permitted, sick] }
+                description: { type: string }
+                attachment: { type: string, format: binary, description: Optional supporting document (image or PDF). }
+      responses:
+        '201':
+          description: Excuse submitted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Presence' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '409':
+          description: Date outside the placement's active range, school has no matching status configured, or a record for that date already exists
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+        '422':
+          description: Missing/invalid fields, or attachment failed file validation
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /presences/{id}/approve:
+    put:
+      tags: [Internship]
+      summary: Approve a single presence record
+      description: Restricted to mentor/coordinator/admin roles able to manage the record's company.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Presence approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Presence' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /presences/bulk-approve:
+    put:
+      tags: [Internship]
+      summary: Approve multiple presence records at once
+      description: Restricted to mentor/coordinator/admin roles able to manage the given company.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkApproveRequest' }
+            example: { company_id: 12, ids: [201, 202, 203] }
+      responses:
+        '200':
+          description: Presences approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/ApprovedCountData' } }
+              example: { success: true, message: "Presences approved", meta: {}, data: { approved_count: 3 } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /journals:
+    get:
+      tags: [Internship]
+      summary: List the current user's own journal entries at a company
+      parameters:
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/DateSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated journal entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Journal' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    post:
+      tags: [Internship]
+      summary: Create or update today's/a day's journal entry
+      description: >
+        Restricted to `student`. Upserts by `(user, company, date)` — calling it again for the
+        same date edits that day's entry, on the fly, rather than requiring a separate create
+        vs update call. The student must have checked in that day, and an already-approved
+        entry can no longer be edited (`409 CONFLICT`).
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JournalRequest' }
+            example: { company_id: 12, date: "2026-09-10", work_type: "Bug fixing", description: "Fixed the login race condition in the mobile app." }
+      responses:
+        '200':
+          description: Journal saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Journal' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '409':
+          description: No check-in on record for that day, or the entry is already approved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "You can only journal a day you checked in", error: { code: "CONFLICT" }, meta: {} }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /journals/pending-approval:
+    get:
+      tags: [Internship]
+      summary: List journal entries at a company awaiting mentor/coordinator approval
+      description: Restricted to mentor/coordinator/admin roles able to manage this company.
+      parameters:
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/DateSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated unapproved journal entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Journal' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /journals/{id}/approve:
+    put:
+      tags: [Internship]
+      summary: Approve a single journal entry
+      description: >
+        Restricted to mentor/coordinator/admin roles able to manage the entry's company. The
+        entry must be filled in (both `work_type` and `description` non-empty) — an
+        entry with a check-in but no journal content yet cannot be approved.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Journal approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Journal' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: Entry isn't filled in yet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+              example: { success: false, data: null, message: "This journal entry isn't filled in yet", error: { code: "CONFLICT" }, meta: {} }
+  /journals/bulk-approve:
+    put:
+      tags: [Internship]
+      summary: Approve multiple journal entries at once
+      description: Restricted to mentor/coordinator/admin roles able to manage the given company.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkApproveRequest' }
+      responses:
+        '200':
+          description: Journals approved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/ApprovedCountData' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ============================= SCORING =============================
+  /scores:
+    get:
+      tags: [Scoring]
+      summary: List a student's scores at a company
+      description: Defaults `user_id` to the caller when omitted (so a student can read their own scores without knowing their own ID).
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Defaults to the caller's own ID.
+          schema: { type: string, format: uuid }
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Scores (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Score' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    post:
+      tags: [Scoring]
+      summary: Record a score
+      description: Restricted to a role that can manage the target company (typically a mentor). `type` is `teknis` (technical) or `non-teknis`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateScoreRequest' }
+      responses:
+        '201':
+          description: Score recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Score' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /scores/{id}:
+    put:
+      tags: [Scoring]
+      summary: Update a score
+      description: Partial update.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScorePatch' }
+      responses:
+        '200':
+          description: Score updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Score' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Scoring]
+      summary: Delete a score
+      description: Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /score-predicates:
+    get:
+      tags: [Scoring]
+      summary: List score-predicate bands (letter grades) configured for a school
+      parameters:
+        - name: school_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Score predicates (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/ScorePredicate' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '422':
+          description: Missing/invalid `school_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    post:
+      tags: [Scoring]
+      summary: Create a score-predicate band
+      description: >
+        Defines a `[min, max]` score range mapped to a letter grade/label for a school (e.g.
+        "A" for 90-100). Restricted to `coordinator` (own school) or `admin`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateScorePredicateRequest' }
+      responses:
+        '201':
+          description: Score predicate created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/ScorePredicate' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /score-predicates/{id}:
+    put:
+      tags: [Scoring]
+      summary: Update a score-predicate band
+      description: Partial update.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScorePredicatePatch' }
+      responses:
+        '200':
+          description: Score predicate updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/ScorePredicate' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Scoring]
+      summary: Delete a score-predicate band
+      description: Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /certificate:
+    get:
+      tags: [Scoring]
+      summary: Download a completion certificate as PDF
+      description: >
+        Generates (or re-generates) and streams a certificate PDF for a student's internship at
+        a company, computed from that student's recorded scores and their school's
+        score-predicate bands. `user_id` defaults to the caller. Returns raw
+        `application/pdf` bytes, **not** the JSON envelope.
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Defaults to the caller's own ID.
+          schema: { type: string, format: uuid }
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Certificate PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+
+  # ============================= CONTENT ==============================
+  /news:
+    get:
+      tags: [Content]
+      summary: List published news (public)
+      description: No authentication required. Only `published` articles are returned.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/NewsPublicSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of published news
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/News' } } }
+    post:
+      tags: [Content]
+      summary: Create a news article
+      description: Restricted to `admin`/`coordinator`, scoped to their school/department. `publish` controls whether it's created as `draft` or `published`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateNewsRequest' }
+            example: { scope_type: "school", scope_id: 1, title: "New Partnership with Acme Corp", content: "We're excited to announce...", publish: true }
+      responses:
+        '201':
+          description: News created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/News' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /news/manage:
+    get:
+      tags: [Content]
+      summary: List news for management (drafts and published, optionally scoped)
+      parameters:
+        - name: scope_type
+          in: query
+          required: false
+          schema: { type: string, enum: [school, department] }
+        - name: scope_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/NewsManagedSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of news (all statuses, scope-checked)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/News' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+  /news/{id}:
+    get:
+      tags: [Content]
+      summary: Get a published news article by slug (public)
+      description: >
+        No authentication required. **Note:** despite the shared `/news/{id}` path shown here,
+        this operation resolves the path segment as the article's **slug** (string), not its
+        numeric ID — see `PUT`/`DELETE` below which use the numeric ID instead.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The article's URL slug, e.g. `new-partnership-with-acme-corp`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The news article
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/News' } }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    put:
+      tags: [Content]
+      summary: Update a news article
+      description: Partial update, by numeric ID. Restricted to `admin`/`coordinator` scoped to the article's school/department.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateNewsRequest' }
+      responses:
+        '200':
+          description: News updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/News' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Content]
+      summary: Delete a news article
+      description: By numeric ID. Restricted to `admin`/`coordinator` scoped to the article's school/department. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /faqs:
+    get:
+      tags: [Content]
+      summary: List all FAQs (public)
+      description: No authentication required. Not paginated.
+      security: []
+      responses:
+        '200':
+          description: All FAQs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/FAQ' } } }
+    post:
+      tags: [Content]
+      summary: Create a FAQ entry
+      description: Restricted to `admin`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFAQRequest' }
+      responses:
+        '201':
+          description: FAQ created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/FAQ' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /faqs/{id}:
+    put:
+      tags: [Content]
+      summary: Update a FAQ entry
+      description: Partial update. Restricted to `admin`.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateFAQRequest' }
+      responses:
+        '200':
+          description: FAQ updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/FAQ' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Content]
+      summary: Delete a FAQ entry
+      description: Restricted to `admin`. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+
+  # ============================= REVIEWS ==============================
+  /monitors:
+    get:
+      tags: [Reviews]
+      summary: List coordinator site-visit monitoring logs
+      description: Restricted to `coordinator`/`admin`; a coordinator sees only their own school's logs.
+      parameters:
+        - name: student_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: company_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/DateSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated list of monitoring visits
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Monitor' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+    post:
+      tags: [Reviews]
+      summary: Log a site-visit monitoring entry
+      description: Restricted to `coordinator`/`admin`. `match_rating` is 1-4.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateMonitorRequest' }
+      responses:
+        '201':
+          description: Monitoring visit logged
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Monitor' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /monitors/{id}:
+    delete:
+      tags: [Reviews]
+      summary: Delete a monitoring log entry
+      description: Restricted to `admin`, or the `coordinator` who logged it. Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /questions:
+    get:
+      tags: [Reviews]
+      summary: List a school's review questionnaire templates
+      parameters:
+        - name: school_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Questions (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Question' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '422':
+          description: Missing/invalid `school_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    post:
+      tags: [Reviews]
+      summary: Create a review questionnaire template question
+      description: Restricted to `coordinator` (own school) or `admin`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateQuestionRequest' }
+      responses:
+        '201':
+          description: Question created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Question' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /questions/{id}:
+    put:
+      tags: [Reviews]
+      summary: Update a review questionnaire question
+      description: Partial update.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateQuestionRequest' }
+      responses:
+        '200':
+          description: Question updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Question' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Reviews]
+      summary: Delete a review questionnaire question
+      description: Returns no body.
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted — no content }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /reviews:
+    post:
+      tags: [Reviews]
+      summary: Submit a review
+      description: >
+        Targets exactly one of `reviewee_user_id` (a mentor rating a student, or vice versa)
+        or `reviewee_company_id` (an aggregate company rating) — enforced by both a DB check
+        constraint and app-level validation. `rating` is 1-5.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReviewRequest' }
+            example: { reviewee_type: "company", reviewee_company_id: 12, question_id: 3, title: "Great mentorship", body: "The team was very supportive.", rating: 5 }
+      responses:
+        '201':
+          description: Review submitted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Review' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /reviews/users/{userID}:
+    get:
+      tags: [Reviews]
+      summary: List reviews written about a specific user
+      description: A `student` may only view their own reviews.
+      parameters:
+        - name: userID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Reviews about this user (not paginated)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { type: array, items: { $ref: '#/components/schemas/Review' } } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+  /reviews/companies/{id}:
+    get:
+      tags: [Reviews]
+      summary: List reviews about a company, with the average rating
+      parameters:
+        - $ref: '#/components/parameters/IdPathParam'
+      responses:
+        '200':
+          description: Reviews about this company plus the computed average rating
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/ReviewListWithAverage' } }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+
+  # ============================ REPORTING =============================
+  /exports/students:
+    get:
+      tags: [Reporting]
+      summary: Export a department's student roster as Excel
+      description: >
+        Restricted to `admin`/`coordinator`. Returns raw
+        `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` bytes as an
+        attachment (`students.xlsx`), **not** the JSON envelope.
+      parameters:
+        - name: department_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Student roster workbook
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing/invalid `department_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  /exports/presence:
+    get:
+      tags: [Reporting]
+      summary: Export a student's presence log at a company as Excel
+      description: >
+        `user_id` defaults to the caller. Returns raw
+        `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` bytes as an
+        attachment (`presence-{company_id}.xlsx`), **not** the JSON envelope.
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Defaults to the caller's own ID.
+          schema: { type: string, format: uuid }
+        - name: company_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Presence log workbook
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+        '422':
+          description: Missing/invalid `company_id`
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+
+  # ========================== NOTIFICATIONS ===========================
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List the current user's notifications
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/NotificationSort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Paginated notifications plus the unread count
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/NotificationListData' } }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+  /notifications/mark-as-read:
+    put:
+      tags: [Notifications]
+      summary: Mark all of the current user's notifications as read
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: All notifications marked as read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+              example: { success: true, data: null, message: "All notifications marked as read", meta: {} }
+        '401': { $ref: '#/components/responses/UnauthenticatedError' }
+        '403': { $ref: '#/components/responses/ForbiddenError' }
+
+  # ============================== HEALTH ==============================
+  /healthz:
+    servers:
+      - url: http://localhost:8080
+        description: Root server — outside the /api/v1 prefix.
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: Always returns 200 if the process is up. No envelope, no auth.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, example: ok } }
+  /readyz:
+    servers:
+      - url: http://localhost:8080
+        description: Root server — outside the /api/v1 prefix.
+    get:
+      tags: [Health]
+      summary: Readiness check
+      description: Pings Postgres and Redis. No envelope, no auth.
+      security: []
+      responses:
+        '200':
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  checks: { type: object, properties: { postgres: { type: string, example: ok }, redis: { type: string, example: ok } } }
+        '503':
+          description: One or more dependencies unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: degraded }
+                  checks: { type: object, properties: { postgres: { type: string, example: down }, redis: { type: string, example: ok } } }
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: internity_session
+      description: >
+        HttpOnly session cookie set by /auth/login, /auth/register, or /auth/refresh.
+        Mutating requests additionally require the X-CSRF-Token header — see the CSRFToken parameter.
+
+  parameters:
+    IdPathParam:
+      name: id
+      in: path
+      required: true
+      description: Numeric resource ID.
+      schema: { type: integer, format: int64, minimum: 1 }
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: >
+        Must equal the current value of the non-httpOnly `internity_csrf` cookie
+        (double-submit CSRF pattern). Required on every mutating (POST/PUT/PATCH/DELETE)
+        authenticated request.
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Page number, 1-indexed. Invalid/omitted values fall back to 1.
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size. Invalid/omitted values fall back to 20; capped at 100.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Search:
+      name: search
+      in: query
+      required: false
+      description: Free-text search filter (resource-specific fields).
+      schema: { type: string }
+    Order:
+      name: order
+      in: query
+      required: false
+      description: Sort direction. Invalid/omitted values fall back to `desc`.
+      schema: { type: string, enum: [asc, desc], default: desc }
+    OrgSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `name`.
+      schema: { type: string, enum: [name, created_at, updated_at], default: name }
+    VacancySort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `created_at`.
+      schema: { type: string, enum: [name, created_at, updated_at], default: created_at }
+    ApplianceSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `created_at`.
+      schema: { type: string, enum: [created_at, updated_at, status], default: created_at }
+    UserSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `created_at`.
+      schema: { type: string, enum: [name, email, created_at], default: created_at }
+    DateSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `date`.
+      schema: { type: string, enum: [date, created_at], default: date }
+    NewsPublicSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `published_at`.
+      schema: { type: string, enum: [title, created_at, published_at], default: published_at }
+    NewsManagedSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by. Invalid values fall back to `created_at`.
+      schema: { type: string, enum: [title, created_at, published_at], default: created_at }
+    NotificationSort:
+      name: sort
+      in: query
+      required: false
+      description: Column to sort by.
+      schema: { type: string, enum: [created_at], default: created_at }
+
+  responses:
+    BadRequestError:
+      description: Malformed request (unparseable JSON body, or a path/query param of the wrong type)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { success: false, data: null, message: "Invalid request", error: { code: "BAD_REQUEST", details: [{ field: "id", issue: "must be a positive integer" }] }, meta: {} }
+    ValidationError:
+      description: Request body failed validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { success: false, data: null, message: "Validation failed", error: { code: "VALIDATION_ERROR", details: [{ field: "email", issue: "email" }] }, meta: {} }
+    UnauthenticatedError:
+      description: Missing, invalid, or expired session cookie
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { success: false, data: null, message: "Not authenticated", error: { code: "UNAUTHENTICATED" }, meta: {} }
+    ForbiddenError:
+      description: Authenticated, but not permitted to perform this action (role/scope check failed, or missing/invalid X-CSRF-Token)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { success: false, data: null, message: "You do not have permission to do that", error: { code: "FORBIDDEN" }, meta: {} }
+    NotFoundError:
+      description: Resource does not exist (or is outside the caller's scope)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { success: false, data: null, message: "Not found", error: { code: "NOT_FOUND" }, meta: {} }
+    ConflictError:
+      description: The request conflicts with the resource's current state
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    # ---------- Envelope ----------
+    Pagination:
+      type: object
+      required: [page, limit, total]
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer, format: int64 }
+    Meta:
+      type: object
+      properties:
+        request_id: { type: string }
+        pagination:
+          anyOf:
+            - $ref: '#/components/schemas/Pagination'
+            - type: "null"
+    SuccessEnvelope:
+      type: object
+      required: [success, data, message]
+      description: The success shape every non-binary endpoint returns, with `data` typed per-endpoint via `allOf` where documented.
+      properties:
+        success: { type: boolean, const: true }
+        data: {}
+        message: { type: string }
+        meta: { $ref: '#/components/schemas/Meta' }
+    ErrorCode:
+      type: string
+      enum: [BAD_REQUEST, VALIDATION_ERROR, UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, RATE_LIMITED, INTERNAL_ERROR]
+    ErrorDetail:
+      type: object
+      required: [issue]
+      properties:
+        field: { type: string }
+        issue: { type: string }
+    ErrorEnvelope:
+      type: object
+      required: [success, data, message, error]
+      properties:
+        success: { type: boolean, const: false }
+        data: { type: "null" }
+        message: { type: string }
+        error:
+          type: object
+          required: [code]
+          properties:
+            code: { $ref: '#/components/schemas/ErrorCode' }
+            details: { type: array, items: { $ref: '#/components/schemas/ErrorDetail' } }
+        meta: { $ref: '#/components/schemas/Meta' }
+
+    # ---------- Identity ----------
+    UserResponse:
+      type: object
+      required: [id, role, name, email, is_active, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [admin, coordinator, mentor, student] }
+        school_id: { type: [integer, "null"], format: int64 }
+        department_id: { type: [integer, "null"], format: int64 }
+        company_id: { type: [integer, "null"], format: int64 }
+        course_id: { type: [integer, "null"], format: int64 }
+        name: { type: string }
+        email: { type: string, format: email }
+        nis: { type: [string, "null"], description: Student ID number. }
+        gender: { type: [string, "null"], enum: [male, female, null] }
+        bio: { type: [string, "null"] }
+        address: { type: [string, "null"] }
+        phone: { type: [string, "null"] }
+        date_of_birth: { type: [string, "null"], format: date-time }
+        avatar_key: { type: [string, "null"], description: Object storage key for the avatar image. }
+        resume_key: { type: [string, "null"], description: Object storage key for the uploaded resume. }
+        skills: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+    UserWrapper:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: '#/components/schemas/UserResponse' }
+    InviteCode:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        course_id: { type: integer, format: int64 }
+        expires_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    RegisterRequest:
+      type: object
+      required: [name, email, password, password_confirmation, invite_code]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 72 }
+        password_confirmation: { type: string }
+        invite_code: { type: string }
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    ResetPasswordRequest:
+      type: object
+      required: [token, password, password_confirmation]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 8, maxLength: 72 }
+        password_confirmation: { type: string }
+    CreateInviteCodeRequest:
+      type: object
+      required: [course_id]
+      properties:
+        course_id: { type: integer, format: int64 }
+        expires_at: { type: [string, "null"], format: date-time }
+    ChangeProfileRequest:
+      type: object
+      description: All fields optional — omitted fields are left unchanged.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        bio: { type: string }
+        address: { type: string }
+        phone: { type: string, maxLength: 50 }
+        gender: { type: string, enum: [male, female] }
+        date_of_birth: { type: string, format: date, example: "2005-03-12" }
+        skills: { type: string }
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password, new_password_confirmation]
+      properties:
+        current_password: { type: string }
+        new_password: { type: string, minLength: 8, maxLength: 72 }
+        new_password_confirmation: { type: string }
+
+    # ---------- Organizations ----------
+    School:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        email: { type: [string, "null"], format: email }
+        phone: { type: [string, "null"] }
+        address: { type: [string, "null"] }
+        website: { type: [string, "null"], format: uri }
+        logo_key: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateSchoolRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        email: { type: string, format: email }
+        phone: { type: string, maxLength: 50 }
+        address: { type: string }
+        website: { type: string, format: uri }
+    SchoolPatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        email: { type: string, format: email }
+        phone: { type: string, maxLength: 50 }
+        address: { type: string }
+        website: { type: string, format: uri }
+    Department:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        school_id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        study_program: { type: [string, "null"] }
+        logo_key: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateDepartmentRequest:
+      type: object
+      required: [school_id, name]
+      properties:
+        school_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 2, maxLength: 255 }
+        description: { type: string }
+        study_program: { type: string, maxLength: 255 }
+    DepartmentPatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        description: { type: string }
+        study_program: { type: string, maxLength: 255 }
+        is_active: { type: boolean }
+    Course:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        department_id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateCourseRequest:
+      type: object
+      required: [department_id, name]
+      properties:
+        department_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string }
+    CoursePatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string }
+        is_active: { type: boolean }
+    Company:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        department_id: { type: integer, format: int64 }
+        name: { type: string }
+        category: { type: [string, "null"] }
+        city: { type: [string, "null"] }
+        state: { type: [string, "null"] }
+        country: { type: [string, "null"] }
+        address: { type: [string, "null"] }
+        email: { type: [string, "null"], format: email }
+        phone: { type: [string, "null"] }
+        website: { type: [string, "null"], format: uri }
+        logo_key: { type: [string, "null"] }
+        contact_person: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateCompanyRequest:
+      type: object
+      required: [department_id, name]
+      properties:
+        department_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 2, maxLength: 255 }
+        category: { type: string, maxLength: 255 }
+        city: { type: string, maxLength: 255 }
+        state: { type: string, maxLength: 255 }
+        country: { type: string, maxLength: 255 }
+        address: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, maxLength: 50 }
+        website: { type: string, format: uri }
+        contact_person: { type: string, maxLength: 255 }
+    CompanyPatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        category: { type: string, maxLength: 255 }
+        city: { type: string, maxLength: 255 }
+        state: { type: string, maxLength: 255 }
+        country: { type: string, maxLength: 255 }
+        address: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, maxLength: 50 }
+        website: { type: string, format: uri }
+        contact_person: { type: string, maxLength: 255 }
+        is_active: { type: boolean }
+
+    # ---------- Vacancies ----------
+    Vacancy:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        company_id: { type: integer, format: int64 }
+        name: { type: string }
+        category: { type: [string, "null"] }
+        description: { type: [string, "null"] }
+        skills: { type: [string, "null"] }
+        slots: { type: integer, minimum: 1 }
+        status: { type: string, enum: [open, closed] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateVacancyRequest:
+      type: object
+      required: [company_id, name]
+      properties:
+        company_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 2, maxLength: 255 }
+        category: { type: string, maxLength: 255 }
+        description: { type: string }
+        skills: { type: string, description: Free-text, comma-separated skill list. }
+        slots: { type: integer, minimum: 1, default: 1, description: Defaults to 1 if omitted or less than 1. }
+    VacancyPatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 255 }
+        category: { type: string, maxLength: 255 }
+        description: { type: string }
+        skills: { type: string }
+        slots: { type: integer, minimum: 1 }
+        status: { type: string, enum: [open, closed] }
+    SavedVacancy:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        vacancy_id: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+    Appliance:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        vacancy_id: { type: integer, format: int64 }
+        status: { type: string, enum: [pending, processed, accepted, rejected, canceled] }
+        message: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ApplyRequest:
+      type: object
+      required: [vacancy_id]
+      properties:
+        vacancy_id: { type: integer, format: int64 }
+        message: { type: string, maxLength: 2000 }
+
+    # ---------- Internship ----------
+    InternDate:
+      type: object
+      description: >
+        Created (with null dates — "accepted, unscheduled") the moment an appliance is
+        accepted. Whether a scheduled placement is "currently active" is derived from
+        start/end at read time, not stored — only the explicit scheduled->completed
+        transition is persisted in `status`.
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        appliance_id: { type: integer, format: int64 }
+        start_date: { type: [string, "null"], format: date-time }
+        end_date: { type: [string, "null"], format: date-time }
+        extended_until: { type: [string, "null"], format: date-time, description: "If set, overrides end_date as the effective end of the placement." }
+        status: { type: string, enum: [scheduled, completed] }
+        version: { type: integer, description: Optimistic-locking version; required as `expected_version` on writes. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SetDatesRequest:
+      type: object
+      required: [start_date, end_date, expected_version]
+      properties:
+        start_date: { type: string, format: date, example: "2026-09-01" }
+        end_date: { type: string, format: date, example: "2026-11-30" }
+        extended_until: { type: string, format: date }
+        expected_version: { type: integer, description: Must match the placement's current `version`, or the write is rejected with 409 CONFLICT. }
+    PresenceStatus:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        school_id: { type: integer, format: int64 }
+        name: { type: string }
+        kind: { type: string, enum: [present, permitted, sick, absent, holiday] }
+        description: { type: [string, "null"] }
+        color: { type: [string, "null"] }
+        icon: { type: [string, "null"] }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreatePresenceStatusRequest:
+      type: object
+      required: [school_id, name, kind]
+      properties:
+        school_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        kind: { type: string, enum: [present, permitted, sick, absent, holiday] }
+        description: { type: string }
+        color: { type: string, maxLength: 20 }
+        icon: { type: string, maxLength: 50 }
+    PresenceStatusPatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string }
+        color: { type: string, maxLength: 20 }
+        icon: { type: string, maxLength: 50 }
+        is_active: { type: boolean }
+    Presence:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        presence_status_id: { type: integer, format: int64 }
+        date: { type: string, format: date-time }
+        check_in_at: { type: [string, "null"], format: date-time }
+        check_out_at: { type: [string, "null"], format: date-time }
+        check_in_lat: { type: [number, "null"] }
+        check_in_lng: { type: [number, "null"] }
+        attachment_key: { type: [string, "null"] }
+        is_approved: { type: boolean }
+        description: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CheckOutRequest:
+      type: object
+      required: [company_id]
+      properties:
+        company_id: { type: integer, format: int64 }
+    BulkApproveRequest:
+      type: object
+      required: [company_id, ids]
+      properties:
+        company_id: { type: integer, format: int64 }
+        ids: { type: array, items: { type: integer, format: int64 }, minItems: 1 }
+    ApprovedCountData:
+      type: object
+      properties:
+        approved_count: { type: integer }
+    Journal:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        date: { type: string, format: date-time }
+        work_type: { type: [string, "null"] }
+        description: { type: [string, "null"] }
+        is_approved: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    JournalRequest:
+      type: object
+      required: [company_id, date, work_type, description]
+      properties:
+        company_id: { type: integer, format: int64 }
+        date: { type: string, format: date, example: "2026-09-10" }
+        work_type: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: string, minLength: 1 }
+    AttendanceDay:
+      type: object
+      properties:
+        date: { type: string, format: date-time }
+        status: { type: string, enum: [reported, missing, upcoming, outside_range] }
+        presence: { $ref: '#/components/schemas/Presence' }
+
+    # ---------- Scoring ----------
+    Score:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        name: { type: string }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        type: { type: string, enum: [teknis, non-teknis] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateScoreRequest:
+      type: object
+      required: [user_id, company_id, name, type]
+      properties:
+        user_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        score: { type: integer, minimum: 0, maximum: 100, default: 0 }
+        type: { type: string, enum: [teknis, non-teknis] }
+    ScorePatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        type: { type: string, enum: [teknis, non-teknis] }
+    ScorePredicate:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        school_id: { type: integer, format: int64 }
+        name: { type: string, description: "Letter grade / label, e.g. \"A\"." }
+        description: { type: [string, "null"] }
+        color: { type: [string, "null"] }
+        min: { type: number }
+        max: { type: number }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateScorePredicateRequest:
+      type: object
+      required: [school_id, name]
+      properties:
+        school_id: { type: integer, format: int64 }
+        name: { type: string, minLength: 1, maxLength: 50 }
+        description: { type: string }
+        color: { type: string, maxLength: 20 }
+        min: { type: number }
+        max: { type: number }
+    ScorePredicatePatch:
+      type: object
+      description: All fields optional.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 50 }
+        description: { type: string }
+        color: { type: string, maxLength: 20 }
+        min: { type: number }
+        max: { type: number }
+
+    # ---------- Content ----------
+    News:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        author_id: { type: string, format: uuid }
+        scope_type: { type: string, enum: [school, department] }
+        scope_id: { type: integer, format: int64 }
+        title: { type: string }
+        slug: { type: string }
+        content: { type: string }
+        image_key: { type: [string, "null"] }
+        status: { type: string, enum: [draft, published] }
+        published_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateNewsRequest:
+      type: object
+      required: [scope_type, scope_id, title, content]
+      properties:
+        scope_type: { type: string, enum: [school, department] }
+        scope_id: { type: integer, format: int64 }
+        title: { type: string, minLength: 2, maxLength: 255 }
+        content: { type: string, minLength: 1 }
+        image_key: { type: string }
+        publish: { type: boolean, default: false, description: "If true, created as `published` (and `published_at` set); otherwise `draft`." }
+    UpdateNewsRequest:
+      type: object
+      description: All fields optional.
+      properties:
+        title: { type: string, minLength: 2, maxLength: 255 }
+        content: { type: string }
+        image_key: { type: string }
+        publish: { type: boolean }
+    FAQ:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        question: { type: string }
+        answer: { type: string }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateFAQRequest:
+      type: object
+      required: [question, answer]
+      properties:
+        question: { type: string, minLength: 1 }
+        answer: { type: string, minLength: 1 }
+        sort_order: { type: integer, default: 0 }
+    UpdateFAQRequest:
+      type: object
+      description: All fields optional.
+      properties:
+        question: { type: string }
+        answer: { type: string }
+        sort_order: { type: integer }
+
+    # ---------- Reviews ----------
+    Monitor:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        coordinator_id: { type: string, format: uuid }
+        student_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        date: { type: string, format: date-time }
+        attachment_key: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        suggest: { type: [string, "null"] }
+        match_rating: { type: integer, minimum: 1, maximum: 4 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateMonitorRequest:
+      type: object
+      required: [student_id, company_id, date]
+      properties:
+        student_id: { type: string, format: uuid }
+        company_id: { type: integer, format: int64 }
+        date: { type: string, format: date, example: "2026-09-15" }
+        attachment_key: { type: string }
+        notes: { type: string }
+        suggest: { type: string }
+        match_rating: { type: integer, minimum: 1, maximum: 4, default: 0 }
+    Question:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        school_id: { type: integer, format: int64 }
+        question: { type: string }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateQuestionRequest:
+      type: object
+      required: [school_id, question]
+      properties:
+        school_id: { type: integer, format: int64 }
+        question: { type: string, minLength: 1 }
+        sort_order: { type: integer, default: 0 }
+    UpdateQuestionRequest:
+      type: object
+      description: All fields optional.
+      properties:
+        question: { type: string }
+        sort_order: { type: integer }
+    Review:
+      type: object
+      description: Targets exactly one of `reviewee_user_id` / `reviewee_company_id`.
+      properties:
+        id: { type: integer, format: int64 }
+        reviewer_id: { type: string, format: uuid }
+        question_id: { type: [integer, "null"], format: int64 }
+        reviewee_user_id: { type: [string, "null"], format: uuid }
+        reviewee_company_id: { type: [integer, "null"], format: int64 }
+        title: { type: [string, "null"] }
+        body: { type: [string, "null"] }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateReviewRequest:
+      type: object
+      required: [reviewee_type]
+      properties:
+        reviewee_type: { type: string, enum: [user, company] }
+        reviewee_user_id: { type: string, format: uuid, description: Required when reviewee_type is "user". }
+        reviewee_company_id: { type: integer, format: int64, description: Required when reviewee_type is "company". }
+        question_id: { type: integer, format: int64 }
+        title: { type: string, maxLength: 255 }
+        body: { type: string }
+        rating: { type: integer, minimum: 1, maximum: 5, default: 0 }
+    ReviewListWithAverage:
+      type: object
+      properties:
+        reviews: { type: array, items: { $ref: '#/components/schemas/Review' } }
+        average_rating: { type: number }
+
+    # ---------- Notifications ----------
+    Notification:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: string, format: uuid }
+        type: { type: string }
+        title: { type: string }
+        body: { type: string }
+        read_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    NotificationListData:
+      type: object
+      properties:
+        notifications: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        unread_count: { type: integer }
