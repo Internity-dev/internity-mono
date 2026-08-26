@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { MenuIcon, XIcon, LogOutIcon, MoonIcon, SunIcon, HelpCircleIcon, SearchIcon } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { navSectionsForRole } from '@/lib/nav'
 import { useTour } from '@/composables/useTour'
-import { tourStepsForRole } from '@/tours'
+import { showMenuHintIfFirstVisit, markHintsSeenFor } from '@/composables/useMenuHints'
+import { tourStepsForRole, coreHintPathsForRole } from '@/tours'
 import { avatarUrl } from '@/lib/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -83,9 +84,25 @@ onMounted(() => {
   if (!auth.user) return
   // Let the sidebar/header finish rendering before targeting elements in it.
   requestAnimationFrame(() => {
-    useTour(auth.user!.role, tourStepsForRole(auth.user!.role)).startIfFirstVisit()
+    const tour = useTour(auth.user!.role, tourStepsForRole(auth.user!.role))
+    // The core tour is about to spotlight these — don't immediately
+    // re-explain them via a menu hint the moment the user clicks one.
+    if (!tour.hasSeenTour()) markHintsSeenFor(coreHintPathsForRole(auth.user!.role))
+    tour.startIfFirstVisit()
   })
 })
+
+// Progressive disclosure for everything the core tour doesn't cover: the
+// first time the user actually lands on a menu, spotlight it once. See
+// composables/useMenuHints.ts.
+watch(
+  () => route.path,
+  (path) => {
+    if (!auth.user) return
+    requestAnimationFrame(() => showMenuHintIfFirstVisit(path))
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
