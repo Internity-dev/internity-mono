@@ -1,17 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterLink } from 'vue-router'
 import { useQuery } from '@tanstack/vue-query'
 import {
   BriefcaseIcon,
-  MapPinnedIcon,
-  CalendarCheckIcon,
-  BookOpenIcon,
-  AwardIcon,
   ClipboardListIcon,
-  ClipboardCheckIcon,
-  ListChecksIcon,
-  UsersIcon,
   Building2Icon,
   School2Icon,
   LibraryBigIcon,
@@ -22,45 +14,102 @@ import PageHeader from '@/components/shared/PageHeader.vue'
 import DonutChart from '@/components/shared/DonutChart.vue'
 import { http } from '@/lib/http'
 import type { ApiSuccess } from '@/types/api'
+import type { Appliance } from '@/types/vacancy'
 
 const auth = useAuthStore()
 
-// Overview KPI row (admin/coordinator only) — real counts pulled from each
-// resource's own list endpoint (limit=1, we only need meta.pagination.total),
-// not fabricated numbers.
-const isStaffLead = computed(() => auth.role === 'admin' || auth.role === 'coordinator')
-// The three status-breakdown charts hit admin-only aggregate endpoints (see
-// brand.md-adjacent backend comments: coordinator scoping is deferred there
-// since there's no clean join to a coordinator's school yet).
 const isAdmin = computed(() => auth.role === 'admin')
+const isCoordinator = computed(() => auth.role === 'coordinator')
+// Org KPI row: admin and coordinator both manage org structure, just at a
+// different scope (platform-wide vs their one school) — the backend already
+// pins every one of these list endpoints to the caller's own school_id for
+// anyone but admin, so no explicit school_id param is needed here.
+const isStaffLead = computed(() => isAdmin.value || isCoordinator.value)
+// Status-breakdown charts: admin (platform), coordinator (their school), or
+// mentor (their company) — backend scopes each accordingly.
+const canSeeStatusCharts = computed(() => isStaffLead.value || auth.role === 'mentor')
+const isStudent = computed(() => auth.role === 'student')
 
-function useCountQuery(key: string, path: string) {
+type StatAccent = 'primary' | 'accent' | 'warning'
+
+function useCountQuery(key: string, path: string, enabled: () => boolean) {
   return useQuery({
     queryKey: [key, 'count'],
     queryFn: () => http.get<ApiSuccess<unknown[]>>(path, { params: { limit: 1 } }).then((r) => r.data.meta?.pagination?.total ?? 0),
-    enabled: isStaffLead,
+    enabled,
   })
 }
 
-const schoolsCount = useCountQuery('schools', '/schools')
-const companiesCount = useCountQuery('companies', '/companies')
-const vacanciesCount = useCountQuery('vacancies', '/vacancies')
-const coursesCount = useCountQuery('courses', '/courses')
+// --- Org overview KPIs. Companies/Vacancies/Courses' list endpoints
+// require an explicit department_id filter for anyone but admin (a
+// coordinator manages a whole school's worth of departments, not one), so
+// those three stay admin-only here rather than risk a 403 — see
+// orgs.Service.ListCompanies/ListCourses and vacancy.Service.ListVacancies.
+// Departments is the one org resource that's auto-scoped to the caller's
+// own school (orgs.Service.ListDepartments), so it's what a coordinator
+// gets instead.
+const schoolsCount = useCountQuery('schools', '/schools', () => isAdmin.value)
+const departmentsCount = useCountQuery('departments', '/departments', () => isCoordinator.value)
+const companiesCount = useCountQuery('companies', '/companies', () => isAdmin.value)
+const vacanciesCount = useCountQuery('vacancies', '/vacancies', () => isAdmin.value)
+const coursesCount = useCountQuery('courses', '/courses', () => isAdmin.value)
 
-const overviewStats = computed(() => [
-  { label: 'Sekolah', value: schoolsCount.data.value, icon: School2Icon, accent: 'primary' as const },
-  { label: 'Perusahaan mitra', value: companiesCount.data.value, icon: Building2Icon, accent: 'accent' as const },
-  { label: 'Lowongan', value: vacanciesCount.data.value, icon: BriefcaseIcon, accent: 'warning' as const },
-  { label: 'Jurusan', value: coursesCount.data.value, icon: LibraryBigIcon, accent: 'primary' as const },
+const overviewStats = computed(() => {
+  if (!isAdmin.value) {
+    return [{ label: 'Departemen', value: departmentsCount.data.value, icon: Building2Icon, accent: 'primary' as StatAccent }]
+  }
+  return [
+    { label: 'Sekolah', value: schoolsCount.data.value, icon: School2Icon, accent: 'primary' as StatAccent },
+    { label: 'Perusahaan mitra', value: companiesCount.data.value, icon: Building2Icon, accent: 'accent' as StatAccent },
+    { label: 'Lowongan', value: vacanciesCount.data.value, icon: BriefcaseIcon, accent: 'warning' as StatAccent },
+    { label: 'Jurusan', value: coursesCount.data.value, icon: LibraryBigIcon, accent: 'primary' as StatAccent },
+  ]
+})
+
+// --- Personal (student): same self-scoped endpoint MyApplicationsView
+// already uses, fetched once and reused for both the KPI count and the
+// status breakdown below — Attendance/Journal aren't shown here since
+// those endpoints require a company_id (a student can have more than one
+// placement across school years; MyInternshipView resolves which one),
+// which this overview has no reason to ask the user to pick just to render
+// a number.
+const myAppliances = useQuery({
+  queryKey: ['my-appliances', 'dashboard'],
+  queryFn: () => http.get<ApiSuccess<Appliance[]>>('/appliances', { params: { limit: 100 } }).then((r) => r.data),
+  enabled: isStudent,
+})
+
+const personalStats = computed(() => [
+  {
+    label: 'Lamaran diajukan',
+    value: myAppliances.data.value?.meta?.pagination?.total,
+    icon: ClipboardListIcon,
+    accent: 'primary' as StatAccent,
+  },
 ])
 
-// --- Analytics: real GROUP BY counts from the backend, not fabricated ---
+const myApplianceChartData = computed(() => {
+  const rows = myAppliances.data.value?.data ?? []
+  const counts: Record<Appliance['status'], number> = { pending: 0, processed: 0, accepted: 0, rejected: 0, canceled: 0 }
+  for (const row of rows) counts[row.status]++
+  return [
+    { label: 'Pending', value: counts.pending, color: 'chart5' as const },
+    { label: 'Processed', value: counts.processed, color: 'chart3' as const },
+    { label: 'Accepted', value: counts.accepted, color: 'chart2' as const },
+    { label: 'Rejected', value: counts.rejected, color: 'chart4' as const },
+    { label: 'Canceled', value: counts.canceled, color: 'chart1' as const },
+  ]
+})
+
+// --- Status-breakdown charts: real GROUP BY counts from the backend, not
+// fabricated. Scoped server-side per statusCountsScopeFor (vacancy module)
+// / presenceStatusCountsScopeFor (internship module).
 
 function useStatusCountsQuery(key: string, path: string) {
   return useQuery({
     queryKey: [key, 'status-counts'],
     queryFn: () => http.get<ApiSuccess<Record<string, number>>>(path).then((r) => r.data.data),
-    enabled: isAdmin,
+    enabled: canSeeStatusCharts,
   })
 }
 
@@ -89,31 +138,12 @@ const presenceChartData = computed(() => [
   { label: 'Holiday', value: presenceCounts.data.value?.holiday ?? 0, color: 'chart5' as const },
 ])
 
-const studentLinks = [
-  { to: '/vacancies', label: 'Browse vacancies', description: 'Find an internship placement', icon: BriefcaseIcon },
-  { to: '/my-applications', label: 'My applications', description: 'Track your application status', icon: ClipboardListIcon },
-  { to: '/my-internship', label: 'My internship', description: 'View or set your placement dates', icon: MapPinnedIcon },
-  { to: '/attendance', label: 'Attendance', description: 'Check in, check out, or file an excuse', icon: CalendarCheckIcon },
-  { to: '/journals', label: 'Journal', description: 'Log your daily activities', icon: BookOpenIcon },
-  { to: '/certificate', label: 'Certificate', description: 'Download your completion certificate', icon: AwardIcon },
-]
-
-const staffLinks = [
-  { to: '/admin/appliances', label: 'Applications', description: 'Review pending vacancy applications', icon: ClipboardListIcon },
-  { to: '/admin/presence', label: 'Attendance review', description: 'Approve student check-ins', icon: ClipboardCheckIcon },
-  { to: '/admin/journals', label: 'Journal review', description: 'Approve student journal entries', icon: BookOpenIcon },
-  { to: '/admin/scores', label: 'Scores', description: 'Enter and review student scores', icon: ListChecksIcon },
-]
-
-const adminLinks = [
-  { to: '/admin/schools', label: 'Schools', description: 'Onboard and manage schools', icon: Building2Icon },
-  { to: '/admin/users', label: 'Users', description: 'Manage staff and student accounts', icon: UsersIcon },
-]
-
-const links = computed(() => {
-  if (auth.role === 'student') return studentLinks
-  if (auth.role === 'admin') return [...adminLinks, ...staffLinks]
-  return staffLinks
+// The scope differs per role, so the chart captions say so instead of
+// implying "everyone" when it's really "your school" or "your company".
+const scopeNoun = computed(() => {
+  if (isAdmin.value) return 'the platform'
+  if (isCoordinator.value) return 'your school'
+  return 'your company'
 })
 </script>
 
@@ -143,11 +173,45 @@ const links = computed(() => {
       </Card>
     </div>
 
-    <div v-if="isAdmin" class="grid gap-4 lg:grid-cols-3">
+    <div v-if="isStudent" class="grid gap-4 sm:grid-cols-3">
+      <Card v-for="stat in personalStats" :key="stat.label" class="gap-2">
+        <CardHeader class="flex-row items-center justify-between space-y-0">
+          <CardDescription>{{ stat.label }}</CardDescription>
+          <div
+            class="flex size-8 items-center justify-center rounded-lg"
+            :class="{
+              'bg-primary-50 text-primary-700 dark:bg-primary-950 dark:text-primary-300': stat.accent === 'primary',
+              'bg-accent-50 text-accent-700 dark:bg-accent-950 dark:text-accent-300': stat.accent === 'accent',
+              'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400': stat.accent === 'warning',
+            }"
+          >
+            <component :is="stat.icon" class="size-4" />
+          </div>
+        </CardHeader>
+        <div class="px-6">
+          <p v-if="stat.value === undefined" class="h-8 w-16 animate-pulse rounded bg-muted" />
+          <p v-else class="font-display text-2xl font-semibold tabular-nums">{{ stat.value }}</p>
+        </div>
+      </Card>
+    </div>
+
+    <div v-if="isStudent" class="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">My applications by status</CardTitle>
+          <CardDescription>Every vacancy you've applied to, current state</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DonutChart :data="myApplianceChartData" />
+        </CardContent>
+      </Card>
+    </div>
+
+    <div v-if="canSeeStatusCharts" class="grid gap-4 lg:grid-cols-3">
       <Card>
         <CardHeader>
           <CardTitle class="text-base">Applications by status</CardTitle>
-          <CardDescription>All vacancy applications, current state</CardDescription>
+          <CardDescription>Every vacancy application in {{ scopeNoun }}, current state</CardDescription>
         </CardHeader>
         <CardContent>
           <DonutChart :data="applianceChartData" />
@@ -156,7 +220,7 @@ const links = computed(() => {
       <Card>
         <CardHeader>
           <CardTitle class="text-base">Vacancies by status</CardTitle>
-          <CardDescription>Open vs closed listings</CardDescription>
+          <CardDescription>Open vs closed listings in {{ scopeNoun }}</CardDescription>
         </CardHeader>
         <CardContent>
           <DonutChart :data="vacancyChartData" />
@@ -165,26 +229,12 @@ const links = computed(() => {
       <Card>
         <CardHeader>
           <CardTitle class="text-base">Attendance breakdown</CardTitle>
-          <CardDescription>This month's presence, by kind</CardDescription>
+          <CardDescription>This month's presence in {{ scopeNoun }}, by kind</CardDescription>
         </CardHeader>
         <CardContent>
           <DonutChart :data="presenceChartData" />
         </CardContent>
       </Card>
-    </div>
-
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <RouterLink v-for="link in links" :key="link.to" :to="link.to">
-        <Card class="h-full transition-[transform,box-shadow] duration-150 ease-out hover:-translate-y-0.5 hover:shadow-md dark:hover:shadow-lg dark:hover:shadow-black/50">
-          <CardHeader>
-            <div class="mb-2 flex size-9 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-950">
-              <component :is="link.icon" class="size-5" />
-            </div>
-            <CardTitle class="text-base">{{ link.label }}</CardTitle>
-            <CardDescription>{{ link.description }}</CardDescription>
-          </CardHeader>
-        </Card>
-      </RouterLink>
     </div>
   </div>
 </template>

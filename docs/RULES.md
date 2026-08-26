@@ -43,3 +43,9 @@ Wajib diikuti semua kontributor (termasuk AI agent) di repo ini.
 17. Jangan overexplain di dokumentasi atau visual (diagram, komentar, README, dst). Langsung ke
     poin, seperlunya aja.
 18. Bahasa gak usah terlalu baku/formal. Santai aja kayak ngobrol biasa, asal jelas.
+19. Screenshot buat dokumentasi/manual/report wajib bersih: gak boleh ada error toast, network
+    error, atau console error ke-capture. Verifikasi live dulu (network tab / console) sebelum
+    screenshot dipakai — jangan asumsi cuma dari tampilan.
+20. Data yang muncul di screenshot dokumentasi wajib jelas ke-load, bukan skeleton/loading state
+    atau state kosong ("No data yet"). Kalau akun/scope yang dipakai datanya kosong, ganti akun
+    atau seed data dulu sebelum screenshot, jangan dipaksain.

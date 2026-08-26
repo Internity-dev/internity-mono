@@ -327,27 +327,40 @@ func (r *Repository) BulkApproveJournals(ctx context.Context, companyID int64, i
 	return result.RowsAffected, result.Error
 }
 
+// PresenceStatusCountsScope narrows CountPresencesByKind to one school
+// (coordinator) or one company (mentor) instead of the whole platform. Zero
+// value (both nil) means unscoped — admin only.
+type PresenceStatusCountsScope struct {
+	SchoolID  *int64
+	CompanyID *int64
+}
+
 // CountPresencesByKind is a single GROUP BY query (joined through
 // presence_statuses for its `kind`, since presences only stores a
-// school-specific presence_status_id) backing the admin overview
-// dashboard's attendance-breakdown chart. Every known kind is present in
-// the result even at zero. Not school-scoped for the same reason
-// ApplianceStatusCounts in the vacancy module isn't yet: admin-only for now.
-// Bounded to [from, to] (inclusive) — presences is the fastest-growing table
-// in the schema, so an all-time GROUP BY here would only get slower with
-// every school-year that passes.
-func (r *Repository) CountPresencesByKind(ctx context.Context, from, to time.Time) (map[PresenceStatusKind]int64, error) {
+// school-specific presence_status_id) backing the overview dashboard's
+// attendance-breakdown chart. Every known kind is present in the result
+// even at zero. Bounded to [from, to] (inclusive) — presences is the
+// fastest-growing table in the schema, so an all-time GROUP BY here would
+// only get slower with every school-year that passes.
+func (r *Repository) CountPresencesByKind(ctx context.Context, from, to time.Time, scope PresenceStatusCountsScope) (map[PresenceStatusKind]int64, error) {
 	var rows []struct {
 		Kind  PresenceStatusKind
 		Count int64
 	}
-	if err := r.db.WithContext(ctx).
+	q := r.db.WithContext(ctx).
 		Table("presences").
 		Select("presence_statuses.kind AS kind, count(*) as count").
 		Joins("JOIN presence_statuses ON presence_statuses.id = presences.presence_status_id").
-		Where("presences.date BETWEEN ? AND ?", from, to).
-		Group("presence_statuses.kind").
-		Find(&rows).Error; err != nil {
+		Where("presences.date BETWEEN ? AND ?", from, to)
+	switch {
+	case scope.CompanyID != nil:
+		q = q.Where("presences.company_id = ?", *scope.CompanyID)
+	case scope.SchoolID != nil:
+		q = q.Joins("JOIN companies ON companies.id = presences.company_id").
+			Joins("JOIN departments ON departments.id = companies.department_id").
+			Where("departments.school_id = ?", *scope.SchoolID)
+	}
+	if err := q.Group("presence_statuses.kind").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	counts := map[PresenceStatusKind]int64{

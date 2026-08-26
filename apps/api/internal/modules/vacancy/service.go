@@ -3,6 +3,7 @@ package vacancy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"internity/internal/httpx"
@@ -396,28 +397,67 @@ func (s *Service) assertCoordinatorOwnsFilter(ctx context.Context, actor *identi
 	return nil
 }
 
-// ApplianceStatusCounts backs the admin overview dashboard's status
-// breakdown. Admin-only for now: a correctly school-scoped version for
-// coordinators needs a join through vacancies -> companies -> departments
-// that doesn't exist yet, and showing an unscoped count to a coordinator
-// would leak other schools' application volume.
-func (s *Service) ApplianceStatusCounts(ctx context.Context, actor *identity.User) (map[ApplianceStatus]int64, error) {
-	if actor.Role != identity.RoleAdmin {
-		return nil, errForbidden
+// statusCountsScopeFor turns the actor's role into the narrowing the two
+// queries below need: admin sees the whole platform, coordinator their own
+// school, mentor their own company. Student has no meaningful scope here
+// (their own appliance/vacancy footprint is a handful of rows, not a
+// breakdown worth charting) and is rejected.
+func statusCountsScopeFor(actor *identity.User) (StatusCountsScope, error) {
+	switch actor.Role {
+	case identity.RoleAdmin:
+		return StatusCountsScope{}, nil
+	case identity.RoleCoordinator:
+		if actor.SchoolID == nil {
+			return StatusCountsScope{}, errForbidden
+		}
+		return StatusCountsScope{SchoolID: actor.SchoolID}, nil
+	case identity.RoleMentor:
+		if actor.CompanyID == nil {
+			return StatusCountsScope{}, errForbidden
+		}
+		return StatusCountsScope{CompanyID: actor.CompanyID}, nil
+	default:
+		return StatusCountsScope{}, errForbidden
 	}
-	return cachex.GetOrSet(ctx, s.rdb, "cache:appliance-status-counts", statusCountsCacheTTL, func() (map[ApplianceStatus]int64, error) {
-		return s.repo.CountAppliancesByStatus(ctx)
+}
+
+// statusCountsCacheKey keeps each scope's cached result separate — sharing
+// one key across schools/companies would leak one coordinator's or mentor's
+// numbers into another's dashboard.
+func statusCountsCacheKey(base string, scope StatusCountsScope) string {
+	switch {
+	case scope.CompanyID != nil:
+		return fmt.Sprintf("%s:company:%d", base, *scope.CompanyID)
+	case scope.SchoolID != nil:
+		return fmt.Sprintf("%s:school:%d", base, *scope.SchoolID)
+	default:
+		return base
+	}
+}
+
+// ApplianceStatusCounts backs the overview dashboard's application
+// status-breakdown chart, scoped per statusCountsScopeFor.
+func (s *Service) ApplianceStatusCounts(ctx context.Context, actor *identity.User) (map[ApplianceStatus]int64, error) {
+	scope, err := statusCountsScopeFor(actor)
+	if err != nil {
+		return nil, err
+	}
+	key := statusCountsCacheKey("cache:appliance-status-counts", scope)
+	return cachex.GetOrSet(ctx, s.rdb, key, statusCountsCacheTTL, func() (map[ApplianceStatus]int64, error) {
+		return s.repo.CountAppliancesByStatus(ctx, scope)
 	})
 }
 
-// VacancyStatusCounts backs the same admin overview dashboard, same
-// admin-only scoping rationale as ApplianceStatusCounts above.
+// VacancyStatusCounts backs the same overview dashboard's vacancy
+// status-breakdown chart, same scoping as ApplianceStatusCounts above.
 func (s *Service) VacancyStatusCounts(ctx context.Context, actor *identity.User) (map[VacancyStatus]int64, error) {
-	if actor.Role != identity.RoleAdmin {
-		return nil, errForbidden
+	scope, err := statusCountsScopeFor(actor)
+	if err != nil {
+		return nil, err
 	}
-	return cachex.GetOrSet(ctx, s.rdb, "cache:vacancy-status-counts", statusCountsCacheTTL, func() (map[VacancyStatus]int64, error) {
-		return s.repo.CountVacanciesByStatus(ctx)
+	key := statusCountsCacheKey("cache:vacancy-status-counts", scope)
+	return cachex.GetOrSet(ctx, s.rdb, key, statusCountsCacheTTL, func() (map[VacancyStatus]int64, error) {
+		return s.repo.CountVacanciesByStatus(ctx, scope)
 	})
 }
 

@@ -586,20 +586,50 @@ func presenceKeyPrefix(date time.Time) string {
 	return fmt.Sprintf("presence/%04d/%02d/%02d", date.Year(), date.Month(), date.Day())
 }
 
-// PresenceStatusCounts backs the admin overview dashboard's attendance
-// breakdown chart, same admin-only scoping rationale as the vacancy
-// module's ApplianceStatusCounts. Defaults to the current calendar month —
-// presences is the fastest-growing table in the schema, so an unbounded
-// all-time query here would only get slower every school-year; a caller may
-// still pass an explicit from/to to look at a different period.
+// presenceStatusCountsScopeFor mirrors the vacancy module's
+// statusCountsScopeFor: admin sees the whole platform, coordinator their
+// own school, mentor their own company. Student is rejected — their own
+// attendance is a handful of rows, not a breakdown worth charting.
+func presenceStatusCountsScopeFor(actor *identity.User) (PresenceStatusCountsScope, error) {
+	switch actor.Role {
+	case identity.RoleAdmin:
+		return PresenceStatusCountsScope{}, nil
+	case identity.RoleCoordinator:
+		if actor.SchoolID == nil {
+			return PresenceStatusCountsScope{}, errForbidden
+		}
+		return PresenceStatusCountsScope{SchoolID: actor.SchoolID}, nil
+	case identity.RoleMentor:
+		if actor.CompanyID == nil {
+			return PresenceStatusCountsScope{}, errForbidden
+		}
+		return PresenceStatusCountsScope{CompanyID: actor.CompanyID}, nil
+	default:
+		return PresenceStatusCountsScope{}, errForbidden
+	}
+}
+
+// PresenceStatusCounts backs the overview dashboard's attendance breakdown
+// chart, scoped per presenceStatusCountsScopeFor. Defaults to the current
+// calendar month — presences is the fastest-growing table in the schema, so
+// an unbounded all-time query here would only get slower every
+// school-year; a caller may still pass an explicit from/to to look at a
+// different period.
 func (s *Service) PresenceStatusCounts(ctx context.Context, actor *identity.User, from, to *time.Time) (map[PresenceStatusKind]int64, error) {
-	if actor.Role != identity.RoleAdmin {
-		return nil, errForbidden
+	scope, err := presenceStatusCountsScopeFor(actor)
+	if err != nil {
+		return nil, err
 	}
 	start, end := resolvePresenceCountsRange(from, to)
 	key := fmt.Sprintf("cache:presence-status-counts:%s:%s", start.Format("2006-01-02"), end.Format("2006-01-02"))
+	switch {
+	case scope.CompanyID != nil:
+		key += fmt.Sprintf(":company:%d", *scope.CompanyID)
+	case scope.SchoolID != nil:
+		key += fmt.Sprintf(":school:%d", *scope.SchoolID)
+	}
 	return cachex.GetOrSet(ctx, s.rdb, key, statusCountsCacheTTL, func() (map[PresenceStatusKind]int64, error) {
-		return s.repo.CountPresencesByKind(ctx, start, end)
+		return s.repo.CountPresencesByKind(ctx, start, end, scope)
 	})
 }
 

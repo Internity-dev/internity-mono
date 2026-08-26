@@ -191,17 +191,37 @@ func (r *Repository) CountAcceptedForVacancy(ctx context.Context, vacancyID int6
 	return count, err
 }
 
-// CountAppliancesByStatus is a single GROUP BY query backing the admin
-// overview dashboard's status-breakdown chart — every known ApplianceStatus
-// is present in the result even at zero, so the caller never has to guess
-// which keys exist.
-func (r *Repository) CountAppliancesByStatus(ctx context.Context) (map[ApplianceStatus]int64, error) {
+// StatusCountsScope narrows the two dashboard status-breakdown queries below
+// to one school (coordinator) or one company (mentor) instead of the whole
+// platform. Zero value (both nil) means unscoped — admin only.
+type StatusCountsScope struct {
+	SchoolID  *int64
+	CompanyID *int64
+}
+
+// CountAppliancesByStatus is a single GROUP BY query backing the overview
+// dashboard's status-breakdown chart — every known ApplianceStatus is
+// present in the result even at zero, so the caller never has to guess
+// which keys exist. `status`/`Group` are qualified with the table name
+// because scope's joins bring in other tables that could otherwise collide
+// (vacancies has its own `status` column).
+func (r *Repository) CountAppliancesByStatus(ctx context.Context, scope StatusCountsScope) (map[ApplianceStatus]int64, error) {
 	var rows []struct {
 		Status ApplianceStatus
 		Count  int64
 	}
-	if err := r.db.WithContext(ctx).Model(&Appliance{}).
-		Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
+	q := r.db.WithContext(ctx).Model(&Appliance{}).Select("appliances.status, count(*) as count")
+	switch {
+	case scope.CompanyID != nil:
+		q = q.Joins("JOIN vacancies ON vacancies.id = appliances.vacancy_id").
+			Where("vacancies.company_id = ?", *scope.CompanyID)
+	case scope.SchoolID != nil:
+		q = q.Joins("JOIN vacancies ON vacancies.id = appliances.vacancy_id").
+			Joins("JOIN companies ON companies.id = vacancies.company_id").
+			Joins("JOIN departments ON departments.id = companies.department_id").
+			Where("departments.school_id = ?", *scope.SchoolID)
+	}
+	if err := q.Group("appliances.status").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	counts := map[ApplianceStatus]int64{
@@ -214,14 +234,22 @@ func (r *Repository) CountAppliancesByStatus(ctx context.Context) (map[Appliance
 }
 
 // CountVacanciesByStatus mirrors CountAppliancesByStatus for the vacancy
-// status-breakdown chart on the admin overview dashboard.
-func (r *Repository) CountVacanciesByStatus(ctx context.Context) (map[VacancyStatus]int64, error) {
+// status-breakdown chart on the overview dashboard.
+func (r *Repository) CountVacanciesByStatus(ctx context.Context, scope StatusCountsScope) (map[VacancyStatus]int64, error) {
 	var rows []struct {
 		Status VacancyStatus
 		Count  int64
 	}
-	if err := r.db.WithContext(ctx).Model(&Vacancy{}).
-		Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
+	q := r.db.WithContext(ctx).Model(&Vacancy{}).Select("vacancies.status, count(*) as count")
+	switch {
+	case scope.CompanyID != nil:
+		q = q.Where("vacancies.company_id = ?", *scope.CompanyID)
+	case scope.SchoolID != nil:
+		q = q.Joins("JOIN companies ON companies.id = vacancies.company_id").
+			Joins("JOIN departments ON departments.id = companies.department_id").
+			Where("departments.school_id = ?", *scope.SchoolID)
+	}
+	if err := q.Group("vacancies.status").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	counts := map[VacancyStatus]int64{VacancyOpen: 0, VacancyClosed: 0}
