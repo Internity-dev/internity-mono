@@ -11,6 +11,10 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/design-tokens ./packages/design-tokens
 COPY apps/landing ./apps/landing
 RUN pnpm install --frozen-lockfile
+# packages/design-tokens/dist is gitignored (generated locally, never
+# committed) — a fresh clone has no dist/theme.css until this runs, and
+# landing's main.css imports @internity/design-tokens/theme.css.
+RUN pnpm run tokens:build
 WORKDIR /repo/apps/landing
 
 # Nuxt bakes runtimeConfig.public into the prerendered payload at build time,

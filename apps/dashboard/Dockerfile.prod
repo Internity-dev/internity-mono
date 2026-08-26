@@ -9,6 +9,10 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/design-tokens ./packages/design-tokens
 COPY apps/dashboard ./apps/dashboard
 RUN pnpm install --frozen-lockfile
+# packages/design-tokens/dist is gitignored (generated locally, never
+# committed) — a fresh clone has no dist/theme.css until this runs, and
+# dashboard's main.css imports @internity/design-tokens/theme.css.
+RUN pnpm run tokens:build
 WORKDIR /repo/apps/dashboard
 
 # Vite bakes VITE_* vars into the bundle at build time, so they arrive as
