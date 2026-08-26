@@ -16,13 +16,22 @@ type CompanyScopeResolver interface {
 	ResolveCompanyScope(ctx context.Context, companyID int64) (schoolID, departmentID int64, err error)
 }
 
-type Service struct {
-	repo      *Repository
-	companies CompanyScopeResolver
+// PlacementChecker answers "is this student placed at this company" —
+// used to scope a mentor's access to reviews of students they actually
+// mentor, the same way every other mentor-facing endpoint in this codebase
+// (scoring, presences, journals) is scoped to the mentor's own company.
+type PlacementChecker interface {
+	HasPlacementAtCompany(ctx context.Context, userID string, companyID int64) (bool, error)
 }
 
-func NewService(repo *Repository, companies CompanyScopeResolver) *Service {
-	return &Service{repo: repo, companies: companies}
+type Service struct {
+	repo       *Repository
+	companies  CompanyScopeResolver
+	placements PlacementChecker
+}
+
+func NewService(repo *Repository, companies CompanyScopeResolver, placements PlacementChecker) *Service {
+	return &Service{repo: repo, companies: companies, placements: placements}
 }
 
 // AverageRating is a pure function — used for a company's aggregate rating display.
@@ -156,6 +165,9 @@ func (s *Service) CreateReview(ctx context.Context, actor *identity.User, in Cre
 		if in.RevieweeUserID == nil {
 			return nil, httpx.NewError(httpx.ErrValidation, "reviewee_user_id is required", httpx.ErrorDetail{Field: "reviewee_user_id", Issue: "required"})
 		}
+		if err := s.assertMentorMentorsStudent(ctx, actor, *in.RevieweeUserID); err != nil {
+			return nil, err
+		}
 	case RevieweeCompany:
 		// Student rates the company they interned at.
 		if actor.Role != identity.RoleStudent {
@@ -184,6 +196,11 @@ func (s *Service) ListReviewsForUser(ctx context.Context, actor *identity.User, 
 	if actor.Role == identity.RoleStudent && actor.ID != userID {
 		return nil, errForbidden
 	}
+	if actor.Role == identity.RoleMentor {
+		if err := s.assertMentorMentorsStudent(ctx, actor, userID); err != nil {
+			return nil, err
+		}
+	}
 	return s.repo.ListReviewsForUser(ctx, userID)
 }
 
@@ -194,6 +211,27 @@ func (s *Service) ListReviewsForCompany(ctx context.Context, companyID int64) ([
 }
 
 // --- helpers ---
+
+// assertMentorMentorsStudent is the fix for a real, live-confirmed
+// cross-tenant leak: ListReviewsForUser/CreateReview previously let any
+// mentor read or write another company's confidential student reviews by
+// just knowing (or guessing) a student's UUID — every sibling mentor
+// endpoint (scoring, presences, journals) already scopes to the mentor's
+// own company, this one didn't. A student is "mentored" by company X iff
+// they have a placement (InternDate) there.
+func (s *Service) assertMentorMentorsStudent(ctx context.Context, actor *identity.User, studentID string) error {
+	if actor.CompanyID == nil {
+		return errForbidden
+	}
+	ok, err := s.placements.HasPlacementAtCompany(ctx, studentID, *actor.CompanyID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errForbidden
+	}
+	return nil
+}
 
 func (s *Service) assertCoordinatorOwnsCompany(ctx context.Context, actor *identity.User, companyID int64) error {
 	schoolID, _, err := s.companies.ResolveCompanyScope(ctx, companyID)

@@ -117,6 +117,22 @@ func (a orgLookupAdapter) GetSchoolName(ctx context.Context, schoolID int64) (st
 	return sch.Name, nil
 }
 
+// placementCheckerAdapter lets the review module verify a mentor actually
+// mentors a given student (has a placement at the mentor's company) without
+// importing internship's repository directly.
+type placementCheckerAdapter struct{ repo *internship.Repository }
+
+func (a placementCheckerAdapter) HasPlacementAtCompany(ctx context.Context, userID string, companyID int64) (bool, error) {
+	_, err := a.repo.GetByUserCompany(ctx, userID, companyID)
+	if err != nil {
+		if errors.Is(err, internship.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // studentLookupAdapter gives the scoring module read-only access to a
 // student's name/NIS without importing identity's repository directly.
 type studentLookupAdapter struct{ repo identity.Repository }
@@ -250,7 +266,7 @@ func main() {
 	contentHandler := content.NewHandler(contentSvc)
 
 	reviewRepo := review.NewRepository(db)
-	reviewSvc := review.NewService(reviewRepo, companyScopeAdapter{repo: orgsRepo})
+	reviewSvc := review.NewService(reviewRepo, companyScopeAdapter{repo: orgsRepo}, placementCheckerAdapter{repo: internshipRepo})
 	reviewHandler := review.NewHandler(reviewSvc)
 
 	reportingSvc := reporting.NewService(identityRepo, presenceExportAdapter{repo: internshipRepo},
