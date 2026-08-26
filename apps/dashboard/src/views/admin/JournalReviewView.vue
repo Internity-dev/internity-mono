@@ -23,12 +23,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface DepartmentOption {
-  ID: number
-  Name: string
+  id: number
+  name: string
 }
 interface CompanyOption {
-  ID: number
-  Name: string
+  id: number
+  name: string
 }
 
 function errMessage(err: unknown): string {
@@ -90,7 +90,7 @@ const companyNameQuery = useQuery({
 })
 const pageDescription = computed(() =>
   companyNameQuery.data.value
-    ? `Reviewing journal entries for ${companyNameQuery.data.value.Name}.`
+    ? `Reviewing journal entries for ${companyNameQuery.data.value.name}.`
     : 'Select a company to review pending journal entries.',
 )
 
@@ -201,8 +201,8 @@ const bulkApproveMutation = useMutation({
           <Select v-model="departmentModel">
             <SelectTrigger class="w-full"><SelectValue placeholder="Select department" /></SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="d in departmentsQuery.data.value ?? []" :key="d.ID" :value="String(d.ID)">
-                {{ d.Name }}
+              <SelectItem v-for="d in departmentsQuery.data.value ?? []" :key="d.id" :value="String(d.id)">
+                {{ d.name }}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -212,8 +212,8 @@ const bulkApproveMutation = useMutation({
           <Select v-model="companyModel" :disabled="!departmentId">
             <SelectTrigger class="w-full"><SelectValue placeholder="Select company" /></SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="c in companiesQuery.data.value ?? []" :key="c.ID" :value="String(c.ID)">
-                {{ c.Name }}
+              <SelectItem v-for="c in companiesQuery.data.value ?? []" :key="c.id" :value="String(c.id)">
+                {{ c.name }}
               </SelectItem>
             </SelectContent>
           </Select>
