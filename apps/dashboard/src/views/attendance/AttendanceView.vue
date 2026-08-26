@@ -68,21 +68,25 @@ function formatDate(value: string) {
 }
 
 // --- today's presence ---
+// Rows can be filed for future dates (the excuse dialog's date field has no
+// min/max), so a future-dated row can sort ahead of today's under
+// sort=date desc. Fetch a small recent window and pick the row whose date
+// actually equals today, rather than assuming row #1 is today's.
 const todayStr = todayISODate()
 const todayPresenceQuery = useQuery({
   queryKey: computed(() => ['today-presence', selectedCompanyId.value]),
   queryFn: async () => {
     const res = await http.get<ApiSuccess<Presence[]>>('/presences', {
-      params: { company_id: selectedCompanyId.value, sort: 'date', order: 'desc', limit: 1, page: 1 },
+      params: { company_id: selectedCompanyId.value, sort: 'date', order: 'desc', limit: 5, page: 1 },
     })
-    return res.data.data[0] ?? null
+    return res.data.data
   },
   enabled: computed(() => selectedCompanyId.value !== undefined),
 })
 const todayPresence = computed(() => {
-  const p = todayPresenceQuery.data.value
-  if (!p) return null
-  return p.date?.slice(0, 10) === todayStr ? p : null
+  const rows = todayPresenceQuery.data.value
+  if (!rows) return null
+  return rows.find((p) => p.date?.slice(0, 10) === todayStr) ?? null
 })
 const todayStatusLabel = computed(() => {
   if (!todayPresence.value) return ''
