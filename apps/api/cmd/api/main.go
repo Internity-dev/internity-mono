@@ -226,7 +226,7 @@ func main() {
 
 	identityRepo := identity.NewRepository(db)
 	identitySvc := identity.NewService(identityRepo, queueMailerAdapter{enqueuer: enqueuer}, identity.DefaultConfig(), storageClient, companyScopeAdapter{repo: orgsRepo})
-	identityHandler := identity.NewHandler(identitySvc, cfg.CookieSecure)
+	identityHandler := identity.NewHandler(identitySvc, cfg.CookieSecure, cfg.CookieDomain)
 
 	notificationRepo := notification.NewRepository(db)
 	notificationSvc := notification.NewService(notificationRepo)

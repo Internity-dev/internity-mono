@@ -27,10 +27,11 @@ const (
 type Handler struct {
 	svc          *Service
 	cookieSecure bool
+	cookieDomain string
 }
 
-func NewHandler(svc *Service, cookieSecure bool) *Handler {
-	return &Handler{svc: svc, cookieSecure: cookieSecure}
+func NewHandler(svc *Service, cookieSecure bool, cookieDomain string) *Handler {
+	return &Handler{svc: svc, cookieSecure: cookieSecure, cookieDomain: cookieDomain}
 }
 
 type loginRequest struct {
@@ -274,14 +275,17 @@ func (h *Handler) setAuthCookies(c *gin.Context, result *LoginResult) {
 	c.SetCookie(CookieRefresh, result.RefreshToken, secondsUntil(result.RefreshExpiresAt), RefreshPath, "", h.cookieSecure, true)
 	// CSRF cookie is deliberately NOT httpOnly — the frontend must read it to
 	// echo it back as X-CSRF-Token (double-submit pattern, see middleware/csrf.go).
-	c.SetCookie(CookieCSRF, result.CSRFToken, secondsUntil(result.RefreshExpiresAt), "/", "", h.cookieSecure, false)
+	// It also gets the shared-parent cookieDomain (session/refresh don't need
+	// it — see the field comment on Handler) so a dashboard on a different
+	// subdomain than this API can actually read it via document.cookie.
+	c.SetCookie(CookieCSRF, result.CSRFToken, secondsUntil(result.RefreshExpiresAt), "/", h.cookieDomain, h.cookieSecure, false)
 }
 
 func (h *Handler) clearAuthCookies(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(CookieSession, "", -1, "/", "", h.cookieSecure, true)
 	c.SetCookie(CookieRefresh, "", -1, RefreshPath, "", h.cookieSecure, true)
-	c.SetCookie(CookieCSRF, "", -1, "/", "", h.cookieSecure, false)
+	c.SetCookie(CookieCSRF, "", -1, "/", h.cookieDomain, h.cookieSecure, false)
 }
 
 func secondsUntil(t time.Time) int {

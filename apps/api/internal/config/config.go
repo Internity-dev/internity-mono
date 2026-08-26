@@ -11,9 +11,19 @@ import (
 )
 
 type Config struct {
-	Env                  string // "development" | "production" | "test"
-	Port                 string
-	CookieSecure         bool
+	Env          string // "development" | "production" | "test"
+	Port         string
+	CookieSecure bool
+	// CookieDomain scopes the CSRF cookie only (session/refresh stay
+	// host-only — they're HttpOnly and only ever need to reach this API's
+	// own host). Needed whenever the dashboard is served from a different
+	// subdomain than the API (e.g. app.example.com vs api.example.com):
+	// without it, the CSRF cookie defaults to a host-only scope on the API's
+	// domain, which the dashboard's JS can never read via document.cookie,
+	// so it can never echo it back as the X-CSRF-Token header. Set to the
+	// shared parent domain, e.g. ".example.com". Empty (default) preserves
+	// today's host-only behavior for same-host local dev.
+	CookieDomain         string
 	DatabaseURL          string
 	RedisURL             string
 	MinioEndpoint        string
@@ -34,6 +44,7 @@ func Load() (*Config, error) {
 		Env:                  getEnv("APP_ENV", "development"),
 		Port:                 getEnv("API_PORT", "8080"),
 		CookieSecure:         getEnv("COOKIE_SECURE", "false") == "true",
+		CookieDomain:         os.Getenv("COOKIE_DOMAIN"),
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
 		RedisURL:             os.Getenv("REDIS_URL"),
 		MinioEndpoint:        os.Getenv("MINIO_ENDPOINT"),
