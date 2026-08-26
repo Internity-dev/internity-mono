@@ -28,6 +28,7 @@ const isStaffLead = computed(() => isAdmin.value || isCoordinator.value)
 // Status-breakdown charts: admin (platform), coordinator (their school), or
 // mentor (their company) — backend scopes each accordingly.
 const canSeeStatusCharts = computed(() => isStaffLead.value || auth.role === 'mentor')
+const isMentor = computed(() => auth.role === 'mentor')
 const isStudent = computed(() => auth.role === 'student')
 
 type StatAccent = 'primary' | 'accent' | 'warning'
@@ -56,14 +57,24 @@ const coursesCount = useCountQuery('courses', '/courses', () => isAdmin.value)
 
 const overviewStats = computed(() => {
   if (!isAdmin.value) {
-    return [{ label: 'Departemen', value: departmentsCount.data.value, icon: Building2Icon, accent: 'primary' as StatAccent }]
+    return [{ label: 'Departments', value: departmentsCount.data.value, icon: Building2Icon, accent: 'primary' as StatAccent }]
   }
   return [
-    { label: 'Sekolah', value: schoolsCount.data.value, icon: School2Icon, accent: 'primary' as StatAccent },
-    { label: 'Perusahaan mitra', value: companiesCount.data.value, icon: Building2Icon, accent: 'accent' as StatAccent },
-    { label: 'Lowongan', value: vacanciesCount.data.value, icon: BriefcaseIcon, accent: 'warning' as StatAccent },
-    { label: 'Jurusan', value: coursesCount.data.value, icon: LibraryBigIcon, accent: 'primary' as StatAccent },
+    { label: 'Schools', value: schoolsCount.data.value, icon: School2Icon, accent: 'primary' as StatAccent },
+    { label: 'Partner companies', value: companiesCount.data.value, icon: Building2Icon, accent: 'accent' as StatAccent },
+    { label: 'Vacancies', value: vacanciesCount.data.value, icon: BriefcaseIcon, accent: 'warning' as StatAccent },
+    { label: 'Courses', value: coursesCount.data.value, icon: LibraryBigIcon, accent: 'primary' as StatAccent },
   ]
+})
+
+// The grid is sized to however many cards actually render — a lone
+// coordinator card (Departments only) in a 4-column grid built for admin's
+// full row otherwise leaves most of the row empty.
+const overviewGridClass = computed(() => {
+  const count = overviewStats.value.length
+  if (count >= 4) return 'sm:grid-cols-2 lg:grid-cols-4'
+  if (count >= 2) return 'sm:grid-cols-2'
+  return 'sm:grid-cols-1'
 })
 
 // --- Personal (student): same self-scoped endpoint MyApplicationsView
@@ -81,7 +92,7 @@ const myAppliances = useQuery({
 
 const personalStats = computed(() => [
   {
-    label: 'Lamaran diajukan',
+    label: 'Applications submitted',
     value: myAppliances.data.value?.meta?.pagination?.total,
     icon: ClipboardListIcon,
     accent: 'primary' as StatAccent,
@@ -117,6 +128,15 @@ const applianceCounts = useStatusCountsQuery('appliances', '/appliances/status-c
 const vacancyCounts = useStatusCountsQuery('vacancies', '/vacancies/status-counts')
 const presenceCounts = useStatusCountsQuery('presences', '/presences/status-counts')
 
+// --- Mentor KPI row: mentor is the only staff role that otherwise gets no
+// top-line numbers (isStaffLead is admin/coordinator only). These reuse the
+// status-count queries above, already fetched for the charts below, so no
+// new API calls.
+const mentorStats = computed(() => [
+  { label: 'Open vacancies', value: vacancyCounts.data.value?.open, icon: BriefcaseIcon, accent: 'warning' as StatAccent },
+  { label: 'Pending applications', value: applianceCounts.data.value?.pending, icon: ClipboardListIcon, accent: 'primary' as StatAccent },
+])
+
 const applianceChartData = computed(() => [
   { label: 'Pending', value: applianceCounts.data.value?.pending ?? 0, color: 'chart5' as const },
   { label: 'Processed', value: applianceCounts.data.value?.processed ?? 0, color: 'chart3' as const },
@@ -151,8 +171,30 @@ const scopeNoun = computed(() => {
   <div class="space-y-6">
     <PageHeader :title="`Welcome back, ${auth.user?.name ?? ''}`" description="Here's what's on your plate today." />
 
-    <div v-if="isStaffLead" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div v-if="isStaffLead" class="grid gap-4" :class="overviewGridClass">
       <Card v-for="stat in overviewStats" :key="stat.label" class="gap-2">
+        <CardHeader class="flex-row items-center justify-between space-y-0">
+          <CardDescription>{{ stat.label }}</CardDescription>
+          <div
+            class="flex size-8 items-center justify-center rounded-lg"
+            :class="{
+              'bg-primary-50 text-primary-700 dark:bg-primary-950 dark:text-primary-300': stat.accent === 'primary',
+              'bg-accent-50 text-accent-700 dark:bg-accent-950 dark:text-accent-300': stat.accent === 'accent',
+              'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400': stat.accent === 'warning',
+            }"
+          >
+            <component :is="stat.icon" class="size-4" />
+          </div>
+        </CardHeader>
+        <div class="px-6">
+          <p v-if="stat.value === undefined" class="h-8 w-16 animate-pulse rounded bg-muted" />
+          <p v-else class="font-display text-2xl font-semibold tabular-nums">{{ stat.value }}</p>
+        </div>
+      </Card>
+    </div>
+
+    <div v-if="isMentor" class="grid gap-4 sm:grid-cols-2">
+      <Card v-for="stat in mentorStats" :key="stat.label" class="gap-2">
         <CardHeader class="flex-row items-center justify-between space-y-0">
           <CardDescription>{{ stat.label }}</CardDescription>
           <div
@@ -202,7 +244,7 @@ const scopeNoun = computed(() => {
           <CardDescription>Every vacancy you've applied to, current state</CardDescription>
         </CardHeader>
         <CardContent>
-          <DonutChart :data="myApplianceChartData" />
+          <DonutChart :data="myApplianceChartData" :is-loading="myAppliances.isLoading.value" />
         </CardContent>
       </Card>
     </div>
@@ -214,7 +256,7 @@ const scopeNoun = computed(() => {
           <CardDescription>Every vacancy application in {{ scopeNoun }}, current state</CardDescription>
         </CardHeader>
         <CardContent>
-          <DonutChart :data="applianceChartData" />
+          <DonutChart :data="applianceChartData" :is-loading="applianceCounts.isLoading.value" />
         </CardContent>
       </Card>
       <Card>
@@ -223,7 +265,7 @@ const scopeNoun = computed(() => {
           <CardDescription>Open vs closed listings in {{ scopeNoun }}</CardDescription>
         </CardHeader>
         <CardContent>
-          <DonutChart :data="vacancyChartData" />
+          <DonutChart :data="vacancyChartData" :is-loading="vacancyCounts.isLoading.value" />
         </CardContent>
       </Card>
       <Card>
@@ -232,7 +274,7 @@ const scopeNoun = computed(() => {
           <CardDescription>This month's presence in {{ scopeNoun }}, by kind</CardDescription>
         </CardHeader>
         <CardContent>
-          <DonutChart :data="presenceChartData" />
+          <DonutChart :data="presenceChartData" :is-loading="presenceCounts.isLoading.value" />
         </CardContent>
       </Card>
     </div>
