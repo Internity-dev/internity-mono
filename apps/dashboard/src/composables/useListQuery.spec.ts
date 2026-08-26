@@ -6,16 +6,18 @@ import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query'
 import { useListQuery, type ListParams } from './useListQuery'
 import type { ApiSuccess } from '@/types/api'
 
-type Fetcher<T = unknown> = (params: ListParams & Record<string, string | number | undefined>) => Promise<ApiSuccess<T[]>>
+type Fetcher<T = unknown, F extends string = string> = (
+  params: ListParams & Partial<Record<F, string | number | undefined>>,
+) => Promise<ApiSuccess<T[]>>
 
 function okResponse<T>(data: T[] = [], pagination?: { page: number; limit: number; total: number }): ApiSuccess<T[]> {
   return { success: true, message: 'ok', data, meta: pagination ? { pagination } : undefined }
 }
 
-async function setup(
+async function setup<F extends string = string>(
   initialPath: string,
-  fetcher: Fetcher,
-  options: Parameters<typeof useListQuery>[2] = {},
+  fetcher: Fetcher<unknown, F>,
+  options: Parameters<typeof useListQuery<unknown, F>>[2] = {},
 ) {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -41,7 +43,7 @@ async function setup(
 
   await flushPromises()
 
-  return { wrapper, router, result: result as ReturnType<typeof useListQuery>, queryClient }
+  return { wrapper, router, result: result as ReturnType<typeof useListQuery<unknown, F>>, queryClient }
 }
 
 describe('useListQuery — reading state from the URL', () => {
@@ -104,15 +106,35 @@ describe('useListQuery — fetching', () => {
     })
   })
 
-  it('merges extraParams into both the fetcher call and hasActiveFilters', async () => {
+  it('reads a declared filter from the URL and forwards it to the fetcher', async () => {
     const fetcher = vi.fn().mockResolvedValue(okResponse())
-    const { result } = await setup('/list', fetcher, {
-      extraParams: () => ({ company_id: 42 }),
+    const { result } = await setup('/list?company_id=42', fetcher, {
+      filters: ['company_id'],
     })
 
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalled())
-    expect(fetcher).toHaveBeenCalledWith(expect.objectContaining({ company_id: 42 }))
+    expect(fetcher).toHaveBeenCalledWith(expect.objectContaining({ company_id: '42' }))
+    expect(result.filters.value).toEqual({ company_id: '42' })
     expect(result.hasActiveFilters.value).toBe(true)
+  })
+
+  it('omits a sendToFetcher: false filter from the fetcher call but still exposes it', async () => {
+    const fetcher = vi.fn().mockResolvedValue(okResponse())
+    const { result } = await setup('/list?department_id=7&company_id=42', fetcher, {
+      filters: [{ key: 'department_id', sendToFetcher: false }, 'company_id'],
+    })
+
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled())
+    const call = fetcher.mock.calls[0]![0]
+    expect(call).not.toHaveProperty('department_id')
+    expect(call).toMatchObject({ company_id: '42' })
+    expect(result.filters.value).toEqual({ department_id: '7', company_id: '42' })
+  })
+
+  it('has no active filters when a declared filter key is absent from the URL', async () => {
+    const fetcher = vi.fn().mockResolvedValue(okResponse())
+    const { result } = await setup('/list', fetcher, { filters: ['company_id'] })
+    expect(result.hasActiveFilters.value).toBe(false)
   })
 
   it('does not fetch at all when enabled() is false', async () => {
@@ -204,5 +226,27 @@ describe('useListQuery — setParams / URL syncing', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.query).toMatchObject({ sort: 'name', order: 'asc', limit: '50', search: 'x' })
+  })
+
+  it('writes a declared filter key into the URL and reflects it back on filters', async () => {
+    const fetcher = vi.fn().mockResolvedValue(okResponse())
+    const { result, router } = await setup('/list', fetcher, { filters: ['company_id'] })
+
+    result.setParams({ company_id: 42 })
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toEqual({ company_id: '42', page: '1' })
+    expect(result.filters.value).toEqual({ company_id: '42' })
+  })
+
+  it('clears a declared filter key from the URL when patched with undefined', async () => {
+    const fetcher = vi.fn().mockResolvedValue(okResponse())
+    const { result, router } = await setup('/list?company_id=42', fetcher, { filters: ['company_id'] })
+
+    result.setParams({ company_id: undefined })
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toEqual({ page: '1' })
+    expect(result.filters.value).toEqual({ company_id: undefined })
   })
 })

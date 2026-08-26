@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
+import { useRoute } from 'vue-router'
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -9,11 +10,14 @@ import { toast } from 'vue-sonner'
 import { PlusIcon, PencilIcon, Trash2Icon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
+import { useListQuery } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { CreateScorePredicatePayload, ScorePredicate, ScorePredicatePatch } from '@/types/scoring'
 import { normalizeKeys } from '@/types/scoring'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
+import ListPagination from '@/components/shared/ListPagination.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,32 +28,47 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 const auth = useAuthStore()
 const queryClient = useQueryClient()
+const route = useRoute()
 
 // --- school scope ---
-const schoolIdInput = ref<string>(auth.user?.school_id ? String(auth.user.school_id) : '')
+// Read straight from the route query (not `listQuery.filters`) so this
+// stays independent of `listQuery`'s own declaration below — its `enabled`
+// option needs it, and referencing the destructured/property result of the
+// same call it's part of would be a circular self-reference: `enabled`
+// would only resolve correctly once `listQuery` already exists, but
+// `listQuery` can't finish constructing until `enabled` is evaluated.
 const schoolId = computed(() => {
-  const n = Number(schoolIdInput.value)
-  return schoolIdInput.value !== '' && Number.isFinite(n) && n > 0 ? n : undefined
+  const raw = (route.query.school_id as string) ?? ''
+  const n = Number(raw)
+  return raw !== '' && Number.isFinite(n) && n > 0 ? n : undefined
 })
 
-const listQuery = useQuery({
-  queryKey: computed(() => ['score-predicates', schoolId.value]),
-  queryFn: async () => {
+const listQuery = useListQuery<ScorePredicate, 'school_id'>(
+  'score-predicates',
+  async (params) => {
     // ScorePredicate (apps/api/.../scoring/domain.go) has no `json` tags, so
     // the raw response is PascalCase — normalizeKeys() converts it to the
     // snake_case shape this view consumes.
-    const res = await http.get<ApiSuccess<unknown[]>>('/score-predicates', {
-      params: { school_id: schoolId.value },
-    })
-    return normalizeKeys<ScorePredicate[]>(res.data.data)
+    const res = await http.get<ApiSuccess<unknown[]>>('/score-predicates', { params })
+    return { ...res.data, data: normalizeKeys<ScorePredicate[]>(res.data.data) }
   },
-  enabled: computed(() => schoolId.value !== undefined),
+  {
+    defaultSort: 'min',
+    defaultOrder: 'asc',
+    filters: ['school_id'],
+    enabled: () => schoolId.value !== undefined,
+  },
+)
+
+const schoolIdModel = computed<string>({
+  get: () => (route.query.school_id as string) ?? (auth.user?.school_id ? String(auth.user.school_id) : ''),
+  set: (v) => listQuery.setParams({ school_id: v || undefined }),
 })
 
-const items = computed(() => [...(listQuery.data.value ?? [])].sort((a, b) => a.min - b.min))
+const items = computed(() => listQuery.items.value)
 
 const columns: Column[] = [
-  { key: 'name', label: 'Name' },
+  { key: 'name', label: 'Name', sortable: true },
   { key: 'range', label: 'Range' },
   { key: 'description', label: 'Description' },
   { key: 'actions', label: '' },
@@ -184,7 +203,7 @@ const deleteMutation = useMutation({
       <CardContent class="flex flex-wrap items-end gap-3">
         <div class="space-y-1.5">
           <Label for="school-id">School ID</Label>
-          <Input id="school-id" v-model="schoolIdInput" type="number" placeholder="e.g. 1" class="w-40" />
+          <Input id="school-id" v-model="schoolIdModel" type="number" placeholder="e.g. 1" class="w-40" />
         </div>
         <p class="pb-1.5 text-sm text-muted-foreground">
           Bands are matched by score range, e.g. A = 90–100. Ranges shouldn't overlap.
@@ -192,12 +211,17 @@ const deleteMutation = useMutation({
       </CardContent>
     </Card>
 
+    <ListToolbar :model-value="listQuery.search.value" placeholder="Search predicates…" @update:model-value="(v) => listQuery.setParams({ search: v })" />
+
     <DataTable
       :columns="columns"
       :rows="items"
       :is-loading="listQuery.isLoading.value"
+      :sort="listQuery.sort.value"
+      :order="listQuery.order.value"
       empty-title="No score predicates yet"
       empty-description="Create bands like A (90–100), B (80–89), C (70–79) for this school."
+      @sort="(key) => listQuery.setParams({ sort: key, order: listQuery.order.value === 'asc' ? 'desc' : 'asc' })"
     >
       <template #cell-range="{ row }">
         <div class="flex items-center gap-2">
@@ -222,6 +246,13 @@ const deleteMutation = useMutation({
         </div>
       </template>
     </DataTable>
+
+    <ListPagination
+      :page="listQuery.page.value"
+      :limit="listQuery.limit.value"
+      :total="listQuery.pagination.value?.total ?? 0"
+      @update:page="(p) => listQuery.setParams({ page: p })"
+    />
 
     <Dialog v-model:open="dialogOpen">
       <DialogContent class="sm:max-w-lg">

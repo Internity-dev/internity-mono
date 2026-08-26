@@ -37,6 +37,9 @@ func queryInt64Required(c *gin.Context, key string) (int64, bool) {
 	return v, true
 }
 
+var scoreSortColumns = map[string]bool{"name": true, "score": true, "created_at": true}
+var scorePredicateSortColumns = map[string]bool{"min": true, "name": true, "created_at": true}
+
 // --- Scores ---
 
 func (h *Handler) ListScores(c *gin.Context) {
@@ -48,12 +51,13 @@ func (h *Handler) ListScores(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := h.svc.ListScores(c.Request.Context(), middleware.CurrentUser(c), userID, companyID)
+	params := httpx.ParseListParams(c, "created_at", scoreSortColumns)
+	rows, total, err := h.svc.ListScores(c.Request.Context(), middleware.CurrentUser(c), userID, companyID, params)
 	if err != nil {
 		httpx.FailFromErr(c, err)
 		return
 	}
-	httpx.OK(c, http.StatusOK, rows, "OK", nil)
+	httpx.OK(c, http.StatusOK, rows, "OK", &httpx.Pagination{Page: params.Page, Limit: params.Limit, Total: total})
 }
 
 type createScoreRequest struct {
@@ -126,12 +130,13 @@ func (h *Handler) ListScorePredicates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := h.svc.ListScorePredicates(c.Request.Context(), middleware.CurrentUser(c), schoolID)
+	params := httpx.ParseListParams(c, "min", scorePredicateSortColumns)
+	rows, total, err := h.svc.ListScorePredicates(c.Request.Context(), middleware.CurrentUser(c), schoolID, params)
 	if err != nil {
 		httpx.FailFromErr(c, err)
 		return
 	}
-	httpx.OK(c, http.StatusOK, rows, "OK", nil)
+	httpx.OK(c, http.StatusOK, rows, "OK", &httpx.Pagination{Page: params.Page, Limit: params.Limit, Total: total})
 }
 
 func (h *Handler) CreateScorePredicate(c *gin.Context) {

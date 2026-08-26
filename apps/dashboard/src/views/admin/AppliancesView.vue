@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { toast } from 'vue-sonner'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
-import { useListQuery, type ListParams } from '@/composables/useListQuery'
+import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { Appliance } from '@/types/vacancy'
 import type { Vacancy } from '@/types/vacancy'
@@ -13,6 +14,7 @@ import { applianceStatus } from '@/lib/status'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
@@ -45,13 +47,14 @@ function formatDate(iso: string) {
 
 const auth = useAuthStore()
 const isMentor = computed(() => auth.user?.role === 'mentor')
+const route = useRoute()
 
-const departmentId = ref<number>()
-const companyId = ref<number>()
-
-watch(departmentId, () => {
-  companyId.value = undefined
-})
+// department_id/company_id/vacancy_id are all read straight from the route
+// query so the cascading pickers below can exist before `list` (which owns
+// the setParams calls that actually write them) is declared.
+const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+const vacancyId = computed(() => (route.query.vacancy_id ? Number(route.query.vacancy_id) : undefined))
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -73,28 +76,19 @@ const companiesQuery = useQuery({
   enabled: computed(() => !isMentor.value && !!departmentId.value),
 })
 
-const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : companyId.value))
+const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : urlCompanyId.value))
 
 const departmentModel = computed<string | undefined>({
   get: () => (departmentId.value ? String(departmentId.value) : undefined),
-  set: (v) => {
-    departmentId.value = v ? Number(v) : undefined
-  },
+  // Changing department resets company and vacancy in one atomic URL update.
+  set: (v) => list.setParams({ department_id: v, company_id: undefined, vacancy_id: undefined }),
 })
 const companyModel = computed<string | undefined>({
-  get: () => (companyId.value ? String(companyId.value) : undefined),
-  set: (v) => {
-    companyId.value = v ? Number(v) : undefined
-  },
+  get: () => (urlCompanyId.value ? String(urlCompanyId.value) : undefined),
+  set: (v) => list.setParams({ company_id: v, vacancy_id: undefined }),
 })
 
 // --- vacancy picker (which application queue to review) -----------------
-
-const vacancyId = ref<number>()
-
-watch(effectiveCompanyId, () => {
-  vacancyId.value = undefined
-})
 
 const vacanciesQuery = useQuery({
   queryKey: computed(() => ['vacancies-picker', effectiveCompanyId.value]),
@@ -109,9 +103,7 @@ const vacanciesQuery = useQuery({
 
 const vacancyModel = computed<string | undefined>({
   get: () => (vacancyId.value ? String(vacancyId.value) : undefined),
-  set: (v) => {
-    vacancyId.value = v ? Number(v) : undefined
-  },
+  set: (v) => list.setParams({ vacancy_id: v }),
 })
 
 const pageDescription = computed(() => {
@@ -121,13 +113,18 @@ const pageDescription = computed(() => {
 
 // --- appliances list (scoped to the selected vacancy) --------------------
 
-function fetchAppliances(params: ListParams & Record<string, string | number | undefined>) {
-  return http.get<ApiSuccess<Appliance[]>>(`/vacancies/${vacancyId.value}/appliances`, { params }).then((r) => r.data)
+function fetchAppliances({ vacancy_id, ...rest }: FetcherParams<'department_id' | 'company_id' | 'vacancy_id'>) {
+  return http.get<ApiSuccess<Appliance[]>>(`/vacancies/${vacancy_id}/appliances`, { params: rest }).then((r) => r.data)
 }
 
-const list = useListQuery<Appliance>('vacancy-appliances', fetchAppliances, {
-  extraParams: () => ({ vacancy_id: vacancyId.value }),
+const list = useListQuery<Appliance, 'department_id' | 'company_id' | 'vacancy_id'>('vacancy-appliances', fetchAppliances, {
+  filters: [{ key: 'department_id', sendToFetcher: false }, { key: 'company_id', sendToFetcher: false }, 'vacancy_id'],
   enabled: () => !!vacancyId.value,
+})
+
+const searchModel = computed<string>({
+  get: () => list.search.value,
+  set: (v) => list.setParams({ search: v }),
 })
 
 const columns: Column[] = [
@@ -234,6 +231,8 @@ const rejectMutation = useMutation({
     </Card>
 
     <template v-if="vacancyId">
+      <ListToolbar v-model="searchModel" placeholder="Search by applicant name or NIS…" />
+
       <DataTable
         :columns="columns"
         :rows="list.items.value"

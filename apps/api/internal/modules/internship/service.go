@@ -144,11 +144,11 @@ func (s *Service) MarkCompleted(ctx context.Context, actor *identity.User, id in
 
 // --- Presence statuses ---
 
-func (s *Service) ListPresenceStatuses(ctx context.Context, actor *identity.User, schoolID int64) ([]PresenceStatus, error) {
+func (s *Service) ListPresenceStatuses(ctx context.Context, actor *identity.User, schoolID int64, params httpx.ListParams) ([]PresenceStatus, int64, error) {
 	if err := s.assertCanViewSchool(actor, schoolID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return s.repo.ListPresenceStatuses(ctx, schoolID)
+	return s.repo.ListPresenceStatuses(ctx, schoolID, params)
 }
 
 func (s *Service) CreatePresenceStatus(ctx context.Context, actor *identity.User, row *PresenceStatus) error {

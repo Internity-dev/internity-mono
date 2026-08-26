@@ -84,11 +84,11 @@ func (s *Service) DeleteMonitor(ctx context.Context, actor *identity.User, id in
 
 // --- Questions ---
 
-func (s *Service) ListQuestions(ctx context.Context, actor *identity.User, schoolID int64) ([]Question, error) {
+func (s *Service) ListQuestions(ctx context.Context, actor *identity.User, schoolID int64, params httpx.ListParams) ([]Question, int64, error) {
 	if actor.Role != identity.RoleAdmin && (actor.SchoolID == nil || *actor.SchoolID != schoolID) {
-		return nil, errForbidden
+		return nil, 0, errForbidden
 	}
-	return s.repo.ListQuestions(ctx, schoolID)
+	return s.repo.ListQuestions(ctx, schoolID, params)
 }
 
 func (s *Service) CreateQuestion(ctx context.Context, actor *identity.User, row *Question) error {

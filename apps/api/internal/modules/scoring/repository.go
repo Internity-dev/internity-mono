@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"internity/internal/httpx"
+
 	"gorm.io/gorm"
 )
 
@@ -25,6 +27,31 @@ func (r *Repository) ListScores(ctx context.Context, userID string, companyID in
 	err := r.db.WithContext(ctx).Where("user_id = ? AND company_id = ?", userID, companyID).
 		Order("created_at").Find(&rows).Error
 	return rows, err
+}
+
+// ListScoresPaged backs the handler-facing, paginated listing. ListScores
+// above stays untouched and unpaginated on purpose: GenerateCertificate
+// needs every score for a placement to compute the certificate average, and
+// must never silently see only one page of them.
+func (r *Repository) ListScoresPaged(ctx context.Context, userID string, companyID int64, params httpx.ListParams) ([]Score, int64, error) {
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("user_id = ? AND company_id = ?", userID, companyID)
+		if params.Search != "" {
+			q = q.Where("name ILIKE ?", "%"+params.Search+"%")
+		}
+		return q
+	}
+	var total int64
+	if err := scope(r.db.WithContext(ctx).Model(&Score{})).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []Score
+	err := scope(r.db.WithContext(ctx).Model(&Score{})).
+		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (r *Repository) GetScore(ctx context.Context, id int64) (*Score, error) {
@@ -49,10 +76,35 @@ func (r *Repository) DeleteScore(ctx context.Context, id int64) error {
 
 // --- Score predicates ---
 
+// ListScorePredicates returns every predicate for a school, unpaginated —
+// GenerateCertificate needs the complete band set to resolve a grade
+// correctly and must never see only one page of them.
 func (r *Repository) ListScorePredicates(ctx context.Context, schoolID int64) ([]ScorePredicate, error) {
 	var rows []ScorePredicate
 	err := r.db.WithContext(ctx).Where("school_id = ?", schoolID).Order("min").Find(&rows).Error
 	return rows, err
+}
+
+func (r *Repository) ListScorePredicatesPaged(ctx context.Context, schoolID int64, params httpx.ListParams) ([]ScorePredicate, int64, error) {
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("school_id = ?", schoolID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("name ILIKE ? OR description ILIKE ?", like, like)
+		}
+		return q
+	}
+	var total int64
+	if err := scope(r.db.WithContext(ctx).Model(&ScorePredicate{})).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []ScorePredicate
+	err := scope(r.db.WithContext(ctx).Model(&ScorePredicate{})).
+		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (r *Repository) GetScorePredicate(ctx context.Context, id int64) (*ScorePredicate, error) {

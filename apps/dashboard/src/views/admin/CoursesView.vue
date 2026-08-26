@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -38,6 +38,7 @@ import {
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'admin')
 const router = useRouter()
+const route = useRoute()
 
 // --- departments picker: scoped to the coordinator's own school, or every
 // department for an admin. Backing both the filter select and the create
@@ -64,30 +65,10 @@ const departmentNameById = computed(() => {
   return map
 })
 
-// A coordinator must always scope to one of their own departments (the
-// backend 403s a course list request with no department_id for anyone but
-// an admin), so default to their first department once the picker loads. An
-// admin defaults to 'all' since department_id is a genuinely optional filter
-// for them.
-const selectedDepartmentId = ref<string>(isAdmin.value ? 'all' : '')
-
-watch(
-  () => departmentsPicker.data.value,
-  (depts) => {
-    const first = depts?.[0]
-    if (!isAdmin.value && selectedDepartmentId.value === '' && first) {
-      selectedDepartmentId.value = String(first.id)
-    }
-  },
-  { immediate: true },
-)
-
-const hasUsableDepartmentFilter = computed(() => isAdmin.value || selectedDepartmentId.value !== '')
-
 // --- list query ---
 
-const { items, pagination, page, limit, search, sort, order, setParams, isLoading, isError, refetch } =
-  useListQuery<Course>(
+const { items, pagination, page, limit, search, sort, order, filters, setParams, isLoading, isError, refetch } =
+  useListQuery<Course, 'department_id'>(
     'courses',
     async (params) => {
       const res = await http.get<ApiSuccess<Course[]>>('/courses', { params })
@@ -96,12 +77,34 @@ const { items, pagination, page, limit, search, sort, order, setParams, isLoadin
     {
       defaultSort: 'name',
       defaultOrder: 'asc',
-      extraParams: () => ({
-        department_id: selectedDepartmentId.value !== 'all' && selectedDepartmentId.value !== '' ? Number(selectedDepartmentId.value) : undefined,
-      }),
-      enabled: () => hasUsableDepartmentFilter.value,
+      filters: ['department_id'],
+      // Read straight from the route query, not the destructured `filters`
+      // above — referencing that here would be a circular self-reference
+      // (this options object is part of `filters`'s own initializer).
+      enabled: () => isAdmin.value || !!route.query.department_id,
     },
   )
+
+// A coordinator must always scope to one of their own departments (the
+// backend 403s a course list request with no department_id for anyone but
+// an admin), so default to their first department once the picker loads. An
+// admin's filter starts unset ('all') since department_id is a genuinely
+// optional filter for them.
+watch(
+  () => departmentsPicker.data.value,
+  (depts) => {
+    const first = depts?.[0]
+    if (!isAdmin.value && !filters.value.department_id && first) {
+      setParams({ department_id: String(first.id) })
+    }
+  },
+  { immediate: true },
+)
+
+const departmentFilterModel = computed<string>({
+  get: () => filters.value.department_id ?? 'all',
+  set: (v) => setParams({ department_id: v === 'all' ? undefined : v }),
+})
 
 interface TableColumn {
   key: string
@@ -177,8 +180,7 @@ const [isActiveField] = defineField('is_active')
 
 function openCreate() {
   editingId.value = null
-  const defaultDept = selectedDepartmentId.value !== 'all' && selectedDepartmentId.value !== '' ? selectedDepartmentId.value : ''
-  resetForm({ values: { department_id: defaultDept, name: '', description: '', is_active: true } })
+  resetForm({ values: { department_id: filters.value.department_id ?? '', name: '', description: '', is_active: true } })
   dialogOpen.value = true
 }
 
@@ -297,7 +299,7 @@ function confirmDelete() {
 
     <template v-else>
       <ListToolbar :model-value="search" placeholder="Search courses…" @update:model-value="(v) => setParams({ search: v })">
-        <Select v-model="selectedDepartmentId">
+        <Select v-model="departmentFilterModel">
           <SelectTrigger class="w-56">
             <SelectValue placeholder="Select a department" />
           </SelectTrigger>

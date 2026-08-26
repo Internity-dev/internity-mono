@@ -142,13 +142,19 @@ func (r *Repository) UpdateAppliance(ctx context.Context, a *Appliance) error {
 }
 
 func (r *Repository) ListAppliancesForUser(ctx context.Context, userID string, params httpx.ListParams) ([]Appliance, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Appliance{}).Where("user_id = ?", userID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("user_id = ?", userID)
+		if params.Search != "" {
+			q = q.Where("message ILIKE ?", "%"+params.Search+"%")
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Appliance{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Appliance
-	err := r.db.WithContext(ctx).Model(&Appliance{}).Where("user_id = ?", userID).
+	err := scope(r.db.WithContext(ctx).Model(&Appliance{})).
 		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
@@ -157,14 +163,21 @@ func (r *Repository) ListAppliancesForUser(ctx context.Context, userID string, p
 }
 
 func (r *Repository) ListAppliancesForVacancy(ctx context.Context, vacancyID int64, params httpx.ListParams) ([]Appliance, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Appliance{}).Where("vacancy_id = ?", vacancyID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Joins("JOIN users ON users.id = appliances.user_id").Where("appliances.vacancy_id = ?", vacancyID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("users.name ILIKE ? OR users.nis ILIKE ? OR appliances.message ILIKE ?", like, like, like)
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Appliance{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Appliance
-	err := r.db.WithContext(ctx).Model(&Appliance{}).Where("vacancy_id = ?", vacancyID).
-		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	err := scope(r.db.WithContext(ctx).Model(&Appliance{})).
+		Order("appliances." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
 	}

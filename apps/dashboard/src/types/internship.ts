@@ -165,7 +165,10 @@ export function todayISODate(): string {
  * GET /presence-statuses?school_id=X, normalized to the snake_case
  * PresenceStatus shape (see the note on that interface above).
  */
+// /presence-statuses now paginates (defaults to 20); a school has at most
+// one status per PresenceStatusKind (5 total), so this asks for a generous
+// ceiling instead of paginating a lookup that's always small.
 export async function fetchPresenceStatuses(schoolId: number): Promise<PresenceStatus[]> {
-  const res = await http.get<ApiSuccess<unknown[]>>('/presence-statuses', { params: { school_id: schoolId } })
+  const res = await http.get<ApiSuccess<unknown[]>>('/presence-statuses', { params: { school_id: schoolId, limit: 100 } })
   return normalizeKeys<PresenceStatus[]>(res.data.data)
 }

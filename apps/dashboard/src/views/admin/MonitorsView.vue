@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -16,6 +17,7 @@ import { normalizeKeys } from '@/types/review'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,15 +41,17 @@ interface Company {
 
 const auth = useAuthStore()
 const queryClient = useQueryClient()
+const route = useRoute()
 
 // --- school -> department -> company cascade ---
-const schoolIdInput = ref<string>(auth.user?.school_id ? String(auth.user.school_id) : '')
-const schoolId = computed(() => {
-  const n = Number(schoolIdInput.value)
-  return schoolIdInput.value !== '' && Number.isFinite(n) && n > 0 ? n : undefined
-})
+// Read straight from the route query (not `listQuery.filters`) so these
+// stay independent of `listQuery`'s own declaration below — its `enabled`
+// option needs them, and referencing the destructured result of the same
+// call it's part of would be a circular self-reference.
+const schoolId = computed(() => (route.query.school_id ? Number(route.query.school_id) : undefined))
+const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
+const companyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
 
-const departmentId = ref<number | undefined>(undefined)
 const departmentsQuery = useQuery({
   queryKey: computed(() => ['departments-picker', schoolId.value]),
   queryFn: async () => {
@@ -60,7 +64,6 @@ const departmentsQuery = useQuery({
 })
 const departments = computed(() => departmentsQuery.data.value ?? [])
 
-const companyId = ref<number | undefined>(undefined)
 const companiesQuery = useQuery({
   queryKey: computed(() => ['companies-picker', departmentId.value]),
   queryFn: async () => {
@@ -73,14 +76,8 @@ const companiesQuery = useQuery({
 })
 const companies = computed(() => companiesQuery.data.value ?? [])
 
-watch(departmentId, () => {
-  companyId.value = undefined
-})
-
-const studentIdFilter = ref('')
-
 // --- list ---
-const listQuery = useListQuery<Monitor>(
+const listQuery = useListQuery<Monitor, 'school_id' | 'department_id' | 'company_id' | 'student_id'>(
   'monitors',
   async (params) => {
     // Monitor (apps/api/.../review/domain.go) carries no `json` tags, so the
@@ -91,13 +88,32 @@ const listQuery = useListQuery<Monitor>(
   },
   {
     defaultSort: 'date',
-    extraParams: () => ({
-      company_id: companyId.value,
-      student_id: studentIdFilter.value || undefined,
-    }),
-    enabled: () => companyId.value !== undefined || studentIdFilter.value !== '',
+    filters: [{ key: 'school_id', sendToFetcher: false }, { key: 'department_id', sendToFetcher: false }, 'company_id', 'student_id'],
+    enabled: () => companyId.value !== undefined || !!route.query.student_id,
   },
 )
+
+const schoolIdModel = computed<string>({
+  get: () => listQuery.filters.value.school_id ?? (auth.user?.school_id ? String(auth.user.school_id) : ''),
+  set: (v) => listQuery.setParams({ school_id: v || undefined, department_id: undefined, company_id: undefined }),
+})
+const departmentModel = computed<string | undefined>({
+  get: () => listQuery.filters.value.department_id,
+  set: (v) => listQuery.setParams({ department_id: v, company_id: undefined }),
+})
+const companyModel = computed<string | undefined>({
+  get: () => listQuery.filters.value.company_id,
+  set: (v) => listQuery.setParams({ company_id: v }),
+})
+const studentIdModel = computed<string>({
+  get: () => listQuery.filters.value.student_id ?? '',
+  set: (v) => listQuery.setParams({ student_id: v || undefined }),
+})
+
+const searchModel = computed<string>({
+  get: () => listQuery.search.value,
+  set: (v) => listQuery.setParams({ search: v }),
+})
 
 const columns: Column[] = [
   { key: 'student_id', label: 'Student' },
@@ -201,36 +217,38 @@ const deleteMutation = useMutation({
       <CardContent class="flex flex-wrap items-end gap-3">
         <div class="space-y-1.5">
           <Label for="school-id">School ID</Label>
-          <Input id="school-id" v-model="schoolIdInput" type="number" placeholder="e.g. 1" class="w-32" />
+          <Input id="school-id" v-model="schoolIdModel" type="number" placeholder="e.g. 1" class="w-32" />
         </div>
         <div class="space-y-1.5">
           <Label for="department">Department</Label>
-          <Select v-model="departmentId">
+          <Select v-model="departmentModel">
             <SelectTrigger id="department" class="w-56">
               <SelectValue placeholder="Select department" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}</SelectItem>
+              <SelectItem v-for="d in departments" :key="d.id" :value="String(d.id)">{{ d.name }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div class="space-y-1.5">
           <Label for="company">Company</Label>
-          <Select v-model="companyId" :disabled="!departmentId">
+          <Select v-model="companyModel" :disabled="!departmentId">
             <SelectTrigger id="company" class="w-56">
               <SelectValue placeholder="Select company" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</SelectItem>
+              <SelectItem v-for="c in companies" :key="c.id" :value="String(c.id)">{{ c.name }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div class="space-y-1.5">
           <Label for="student-filter">Student ID (optional)</Label>
-          <Input id="student-filter" v-model="studentIdFilter" placeholder="Filter by UUID" class="w-56" />
+          <Input id="student-filter" v-model="studentIdModel" placeholder="Filter by UUID" class="w-56" />
         </div>
       </CardContent>
     </Card>
+
+    <ListToolbar v-model="searchModel" placeholder="Search by student name, NIS, notes, or suggestions…" />
 
     <DataTable
       :columns="columns"

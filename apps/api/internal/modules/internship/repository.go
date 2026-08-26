@@ -76,10 +76,26 @@ func (r *Repository) UpdateWithVersion(ctx context.Context, row *InternDate, exp
 
 // --- Presence statuses ---
 
-func (r *Repository) ListPresenceStatuses(ctx context.Context, schoolID int64) ([]PresenceStatus, error) {
+func (r *Repository) ListPresenceStatuses(ctx context.Context, schoolID int64, params httpx.ListParams) ([]PresenceStatus, int64, error) {
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("school_id = ?", schoolID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("name ILIKE ? OR description ILIKE ?", like, like)
+		}
+		return q
+	}
+	var total int64
+	if err := scope(r.db.WithContext(ctx).Model(&PresenceStatus{})).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var rows []PresenceStatus
-	err := r.db.WithContext(ctx).Where("school_id = ?", schoolID).Order("name").Find(&rows).Error
-	return rows, err
+	err := scope(r.db.WithContext(ctx).Model(&PresenceStatus{})).
+		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (r *Repository) GetPresenceStatus(ctx context.Context, id int64) (*PresenceStatus, error) {
@@ -155,13 +171,19 @@ func (r *Repository) ListPresencesInRange(ctx context.Context, userID string, co
 }
 
 func (r *Repository) ListPresencesForUser(ctx context.Context, userID string, companyID int64, params httpx.ListParams) ([]Presence, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Presence{}).Where("user_id = ? AND company_id = ?", userID, companyID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("user_id = ? AND company_id = ?", userID, companyID)
+		if params.Search != "" {
+			q = q.Where("description ILIKE ?", "%"+params.Search+"%")
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Presence{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Presence
-	err := r.db.WithContext(ctx).Model(&Presence{}).Where("user_id = ? AND company_id = ?", userID, companyID).
+	err := scope(r.db.WithContext(ctx).Model(&Presence{})).
 		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
@@ -194,14 +216,21 @@ func (r *Repository) ListPresencesForExport(ctx context.Context, userID string, 
 }
 
 func (r *Repository) ListPresencesForApproval(ctx context.Context, companyID int64, params httpx.ListParams) ([]Presence, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Presence{}).Where("company_id = ?", companyID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Joins("JOIN users ON users.id = presences.user_id").Where("presences.company_id = ?", companyID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("users.name ILIKE ? OR users.nis ILIKE ? OR presences.description ILIKE ?", like, like, like)
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Presence{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Presence
-	err := r.db.WithContext(ctx).Model(&Presence{}).Where("company_id = ?", companyID).
-		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	err := scope(r.db.WithContext(ctx).Model(&Presence{})).
+		Order("presences." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -248,13 +277,20 @@ func (r *Repository) UpdateJournal(ctx context.Context, row *Journal) error {
 }
 
 func (r *Repository) ListJournalsForUser(ctx context.Context, userID string, companyID int64, params httpx.ListParams) ([]Journal, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Journal{}).Where("user_id = ? AND company_id = ?", userID, companyID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("user_id = ? AND company_id = ?", userID, companyID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("work_type ILIKE ? OR description ILIKE ?", like, like)
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Journal{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Journal
-	err := r.db.WithContext(ctx).Model(&Journal{}).Where("user_id = ? AND company_id = ?", userID, companyID).
+	err := scope(r.db.WithContext(ctx).Model(&Journal{})).
 		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
@@ -263,14 +299,21 @@ func (r *Repository) ListJournalsForUser(ctx context.Context, userID string, com
 }
 
 func (r *Repository) ListJournalsForApproval(ctx context.Context, companyID int64, params httpx.ListParams) ([]Journal, int64, error) {
-	base := r.db.WithContext(ctx).Model(&Journal{}).Where("company_id = ?", companyID)
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Joins("JOIN users ON users.id = journals.user_id").Where("journals.company_id = ?", companyID)
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("users.name ILIKE ? OR users.nis ILIKE ? OR journals.work_type ILIKE ? OR journals.description ILIKE ?", like, like, like, like)
+		}
+		return q
+	}
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := scope(r.db.WithContext(ctx).Model(&Journal{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []Journal
-	err := r.db.WithContext(ctx).Model(&Journal{}).Where("company_id = ?", companyID).
-		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	err := scope(r.db.WithContext(ctx).Model(&Journal{})).
+		Order("journals." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
 	}

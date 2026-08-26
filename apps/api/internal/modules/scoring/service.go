@@ -51,16 +51,16 @@ func NewService(repo *Repository, companies CompanyScopeResolver, orgs OrgLookup
 
 // --- Scores ---
 
-func (s *Service) ListScores(ctx context.Context, actor *identity.User, userID string, companyID int64) ([]Score, error) {
+func (s *Service) ListScores(ctx context.Context, actor *identity.User, userID string, companyID int64, params httpx.ListParams) ([]Score, int64, error) {
 	if actor.Role == identity.RoleStudent && actor.ID != userID {
-		return nil, errForbidden
+		return nil, 0, errForbidden
 	}
 	if actor.Role != identity.RoleStudent {
 		if err := s.assertCanManageCompany(ctx, actor, companyID); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	return s.repo.ListScores(ctx, userID, companyID)
+	return s.repo.ListScoresPaged(ctx, userID, companyID, params)
 }
 
 type CreateScoreInput struct {
@@ -118,11 +118,11 @@ func (s *Service) DeleteScore(ctx context.Context, actor *identity.User, id int6
 
 // --- Score predicates ---
 
-func (s *Service) ListScorePredicates(ctx context.Context, actor *identity.User, schoolID int64) ([]ScorePredicate, error) {
+func (s *Service) ListScorePredicates(ctx context.Context, actor *identity.User, schoolID int64, params httpx.ListParams) ([]ScorePredicate, int64, error) {
 	if err := s.assertCanViewSchool(actor, schoolID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return s.repo.ListScorePredicates(ctx, schoolID)
+	return s.repo.ListScorePredicatesPaged(ctx, schoolID, params)
 }
 
 func (s *Service) CreateScorePredicate(ctx context.Context, actor *identity.User, row *ScorePredicate) error {

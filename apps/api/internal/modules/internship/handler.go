@@ -22,6 +22,7 @@ func NewHandler(svc *Service) *Handler {
 
 var presenceSortColumns = map[string]bool{"date": true, "created_at": true}
 var journalSortColumns = map[string]bool{"date": true, "created_at": true}
+var presenceStatusSortColumns = map[string]bool{"name": true, "created_at": true}
 
 func idParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -162,12 +163,13 @@ func (h *Handler) ListPresenceStatuses(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := h.svc.ListPresenceStatuses(c.Request.Context(), middleware.CurrentUser(c), schoolID)
+	params := httpx.ParseListParams(c, "name", presenceStatusSortColumns)
+	rows, total, err := h.svc.ListPresenceStatuses(c.Request.Context(), middleware.CurrentUser(c), schoolID, params)
 	if err != nil {
 		httpx.FailFromErr(c, err)
 		return
 	}
-	httpx.OK(c, http.StatusOK, rows, "OK", nil)
+	httpx.OK(c, http.StatusOK, rows, "OK", &httpx.Pagination{Page: params.Page, Limit: params.Limit, Total: total})
 }
 
 func (h *Handler) CreatePresenceStatus(c *gin.Context) {

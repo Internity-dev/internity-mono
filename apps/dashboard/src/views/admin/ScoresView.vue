@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -8,6 +9,7 @@ import { toast } from 'vue-sonner'
 import { PlusIcon, StarIcon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
+import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { Score, ScoreType } from '@/types/scoring'
 import type { Review, CreateReviewPayload } from '@/types/review'
@@ -15,6 +17,8 @@ import { normalizeKeys } from '@/types/review'
 
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
+import ListPagination from '@/components/shared/ListPagination.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import StarRatingInput from '@/components/shared/StarRatingInput.vue'
@@ -43,13 +47,15 @@ function errMessage(err: unknown): string {
 
 const auth = useAuthStore()
 const isMentor = computed(() => auth.user?.role === 'mentor')
+const route = useRoute()
 
-const departmentId = ref<number>()
-const companyId = ref<number>()
-
-watch(departmentId, () => {
-  companyId.value = undefined
-})
+// Read straight from the route query (not `scoresList.filters`) so these
+// stay independent of `scoresList`'s own declaration further below — its
+// `enabled` option needs them, and referencing the destructured result of
+// the same call it's part of would be a circular self-reference.
+const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+const studentId = computed(() => (route.query.student_id as string) ?? '')
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -71,46 +77,50 @@ const companiesQuery = useQuery({
   enabled: computed(() => !isMentor.value && !!departmentId.value),
 })
 
-const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : companyId.value))
+const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : urlCompanyId.value))
 
 const departmentModel = computed<string | undefined>({
   get: () => (departmentId.value ? String(departmentId.value) : undefined),
-  set: (v) => {
-    departmentId.value = v ? Number(v) : undefined
-  },
+  // Changing department resets company in the same atomic URL update.
+  set: (v) => scoresList.setParams({ department_id: v, company_id: undefined }),
 })
 const companyModel = computed<string | undefined>({
-  get: () => (companyId.value ? String(companyId.value) : undefined),
-  set: (v) => {
-    companyId.value = v ? Number(v) : undefined
-  },
+  get: () => (urlCompanyId.value ? String(urlCompanyId.value) : undefined),
+  set: (v) => scoresList.setParams({ company_id: v }),
 })
 
 // --- student picker (known rough edge — no student-search endpoint exists
 // yet; staff must paste the student's UUID directly, see report) -----------
 
-const studentId = ref('')
 const isValidStudentId = computed(() => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(studentId.value.trim()))
 const canQuery = computed(() => !!effectiveCompanyId.value && isValidStudentId.value)
 
-// --- scores list (no pagination on this endpoint — a plain list) ----------
-
-const scoresQuery = useQuery({
-  queryKey: computed(() => ['scores', effectiveCompanyId.value, studentId.value.trim()]),
-  queryFn: () =>
-    http
-      .get<ApiSuccess<Score[]>>('/scores', { params: { user_id: studentId.value.trim(), company_id: effectiveCompanyId.value } })
-      .then((r) => r.data.data),
-  enabled: canQuery,
+const studentIdModel = computed<string>({
+  get: () => studentId.value,
+  set: (v) => scoresList.setParams({ student_id: v || undefined }),
 })
 
-const scores = computed(() => scoresQuery.data.value ?? [])
+// --- scores list -----------------------------------------------------------
+
+function fetchScores(params: FetcherParams<'department_id' | 'company_id' | 'student_id'>) {
+  return http
+    .get<ApiSuccess<Score[]>>('/scores', { params: { ...params, user_id: studentId.value.trim(), company_id: effectiveCompanyId.value } })
+    .then((r) => r.data)
+}
+
+const scoresList = useListQuery<Score, 'department_id' | 'company_id' | 'student_id'>('scores', fetchScores, {
+  defaultSort: 'created_at',
+  filters: [{ key: 'department_id', sendToFetcher: false }, { key: 'company_id', sendToFetcher: false }, { key: 'student_id', sendToFetcher: false }],
+  enabled: () => canQuery.value,
+})
+
+const scores = computed(() => scoresList.items.value)
 const average = computed(() => (scores.value.length ? scores.value.reduce((sum, s) => sum + s.score, 0) / scores.value.length : null))
 
 const columns: Column[] = [
-  { key: 'name', label: 'Name' },
+  { key: 'name', label: 'Name', sortable: true },
   { key: 'type', label: 'Type' },
-  { key: 'score', label: 'Score' },
+  { key: 'score', label: 'Score', sortable: true },
   { key: 'actions', label: '', class: 'text-right' },
 ]
 
@@ -276,7 +286,7 @@ const onSubmitReview = reviewForm.handleSubmit((values) =>
         </div>
         <div class="w-80 space-y-1.5">
           <label class="text-sm font-medium">Student ID (UUID)</label>
-          <Input v-model="studentId" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" class="font-mono text-sm" />
+          <Input v-model="studentIdModel" placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6" class="font-mono text-sm" />
           <p v-if="studentId && !isValidStudentId" class="text-xs text-destructive">Not a valid UUID.</p>
         </div>
       </CardContent>
@@ -286,12 +296,17 @@ const onSubmitReview = reviewForm.handleSubmit((values) =>
       <p v-if="average !== null" class="text-sm text-muted-foreground">
         Average score: <span class="font-medium text-foreground">{{ average.toFixed(1) }}</span>
       </p>
+      <ListToolbar :model-value="scoresList.search.value" placeholder="Search scores…" @update:model-value="(v) => scoresList.setParams({ search: v })" />
+
       <DataTable
         :columns="columns"
         :rows="scores"
-        :is-loading="scoresQuery.isLoading.value"
+        :is-loading="scoresList.isLoading.value"
+        :sort="scoresList.sort.value"
+        :order="scoresList.order.value"
         empty-title="No scores yet"
         empty-description="Add this student's first score for their placement."
+        @sort="(key) => scoresList.setParams({ sort: key, order: scoresList.order.value === 'asc' ? 'desc' : 'asc' })"
       >
         <template #cell-name="{ row }">
           <span class="font-medium text-foreground">{{ row.name }}</span>
@@ -307,6 +322,13 @@ const onSubmitReview = reviewForm.handleSubmit((values) =>
           </div>
         </template>
       </DataTable>
+
+      <ListPagination
+        :page="scoresList.page.value"
+        :limit="scoresList.limit.value"
+        :total="scoresList.pagination.value?.total ?? 0"
+        @update:page="(p) => scoresList.setParams({ page: p })"
+      />
 
       <Card v-if="isMentor">
         <CardHeader class="flex flex-row items-center justify-between gap-3">

@@ -19,6 +19,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 var newsSortColumns = map[string]bool{"title": true, "created_at": true, "published_at": true}
+var faqSortColumns = map[string]bool{"sort_order": true, "question": true, "created_at": true}
 
 func idParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -51,12 +52,13 @@ func (h *Handler) GetPublicNewsBySlug(c *gin.Context) {
 }
 
 func (h *Handler) ListPublicFAQs(c *gin.Context) {
-	rows, err := h.svc.ListFAQs(c.Request.Context())
+	params := httpx.ParseListParams(c, "sort_order", faqSortColumns)
+	rows, total, err := h.svc.ListFAQs(c.Request.Context(), params)
 	if err != nil {
 		httpx.FailFromErr(c, err)
 		return
 	}
-	httpx.OK(c, http.StatusOK, rows, "OK", nil)
+	httpx.OK(c, http.StatusOK, rows, "OK", &httpx.Pagination{Page: params.Page, Limit: params.Limit, Total: total})
 }
 
 // --- Authenticated ---

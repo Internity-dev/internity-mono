@@ -88,8 +88,6 @@ const companyNameById = computed(() => {
 
 // --- user directory ---
 
-const roleFilter = ref<Role | 'all'>('all')
-
 const {
   items: users,
   pagination,
@@ -98,11 +96,12 @@ const {
   search,
   sort,
   order,
+  filters,
   setParams,
   isLoading: isUsersLoading,
   isError: isUsersError,
   refetch: refetchUsers,
-} = useListQuery<User>(
+} = useListQuery<User, 'role'>(
   'users',
   async (params) => {
     const res = await http.get<ApiSuccess<User[]>>('/users', { params })
@@ -111,9 +110,14 @@ const {
   {
     defaultSort: 'created_at',
     defaultOrder: 'desc',
-    extraParams: () => ({ role: roleFilter.value === 'all' ? undefined : roleFilter.value }),
+    filters: ['role'],
   },
 )
+
+const roleFilterModel = computed<Role | 'all'>({
+  get: () => (filters.value.role as Role | undefined) ?? 'all',
+  set: (v) => setParams({ role: v === 'all' ? undefined : v }),
+})
 
 interface UserColumn {
   key: string
@@ -368,7 +372,7 @@ function formatDate(value: string) {
     <PageHeader title="Users" description="Manage the people using Internity." />
 
     <ListToolbar :model-value="search" placeholder="Search by name or email…" @update:model-value="(v) => setParams({ search: v })">
-      <Select v-model="roleFilter">
+      <Select v-model="roleFilterModel">
         <SelectTrigger class="w-44">
           <SelectValue placeholder="All roles" />
         </SelectTrigger>

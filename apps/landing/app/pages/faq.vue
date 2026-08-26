@@ -16,8 +16,11 @@ const config = useRuntimeConfig()
 
 // Client-side fetch on mount. FAQ content changes independently of a landing
 // deploy, so an admin's edit shouldn't require a rebuild.
+// /faqs now paginates (defaults to 20); this page shows the whole list, so
+// ask for a generous ceiling instead.
 const { data, pending, error } = await useFetch<ApiEnvelope<Faq[]>>(`${config.public.apiBaseURL}/faqs`, {
   server: false,
+  params: { limit: 100 },
 })
 
 const search = ref('')

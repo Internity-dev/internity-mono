@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { toast } from 'vue-sonner'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
-import { useListQuery, type ListParams } from '@/composables/useListQuery'
+import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { Presence, BulkApproveResult } from '@/types/internship'
 import { approvalStatus } from '@/lib/status'
@@ -12,6 +13,7 @@ import { approvalStatus } from '@/lib/status'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
@@ -48,13 +50,10 @@ function formatTime(iso: string | null) {
 
 const auth = useAuthStore()
 const isMentor = computed(() => auth.user?.role === 'mentor')
+const route = useRoute()
 
-const departmentId = ref<number>()
-const companyId = ref<number>()
-
-watch(departmentId, () => {
-  companyId.value = undefined
-})
+const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -76,19 +75,15 @@ const companiesQuery = useQuery({
   enabled: computed(() => !isMentor.value && !!departmentId.value),
 })
 
-const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : companyId.value))
+const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : urlCompanyId.value))
 
 const departmentModel = computed<string | undefined>({
   get: () => (departmentId.value ? String(departmentId.value) : undefined),
-  set: (v) => {
-    departmentId.value = v ? Number(v) : undefined
-  },
+  set: (v) => list.setParams({ department_id: v, company_id: undefined }),
 })
 const companyModel = computed<string | undefined>({
-  get: () => (companyId.value ? String(companyId.value) : undefined),
-  set: (v) => {
-    companyId.value = v ? Number(v) : undefined
-  },
+  get: () => (urlCompanyId.value ? String(urlCompanyId.value) : undefined),
+  set: (v) => list.setParams({ company_id: v }),
 })
 
 const companyNameQuery = useQuery({
@@ -104,14 +99,19 @@ const pageDescription = computed(() =>
 
 // --- presences list --------------------------------------------------------
 
-function fetchPresences(params: ListParams & Record<string, string | number | undefined>) {
-  return http.get<ApiSuccess<Presence[]>>('/presences/pending-approval', { params }).then((r) => r.data)
+function fetchPresences(params: FetcherParams<'department_id' | 'company_id'>) {
+  return http.get<ApiSuccess<Presence[]>>('/presences/pending-approval', { params: { ...params, company_id: effectiveCompanyId.value } }).then((r) => r.data)
 }
 
-const list = useListQuery<Presence>('presences-review', fetchPresences, {
+const list = useListQuery<Presence, 'department_id' | 'company_id'>('presences-review', fetchPresences, {
   defaultSort: 'date',
-  extraParams: () => ({ company_id: effectiveCompanyId.value }),
+  filters: [{ key: 'department_id', sendToFetcher: false }, { key: 'company_id', sendToFetcher: false }],
   enabled: () => !!effectiveCompanyId.value,
+})
+
+const searchModel = computed<string>({
+  get: () => list.search.value,
+  set: (v) => list.setParams({ search: v }),
 })
 
 // --- selection -------------------------------------------------------------
@@ -225,6 +225,8 @@ const bulkApproveMutation = useMutation({
     </Card>
 
     <template v-if="effectiveCompanyId">
+      <ListToolbar v-model="searchModel" placeholder="Search by student name, NIS, or description…" />
+
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-muted-foreground">
           {{ selected.size }} selected

@@ -17,7 +17,9 @@ const expandedId = ref<number | null>(null)
 const { data, isLoading, isError, refetch } = useQuery({
   queryKey: ['faqs'],
   queryFn: async () => {
-    const res = await http.get<ApiSuccess<Faq[]>>('/faqs')
+    // /faqs now paginates (defaults to 20); this page shows and client-side
+    // filters the whole list, so ask for a generous ceiling instead.
+    const res = await http.get<ApiSuccess<Faq[]>>('/faqs', { params: { limit: 100 } })
     return res.data.data
   },
   retry: false,

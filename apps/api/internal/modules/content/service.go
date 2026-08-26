@@ -197,8 +197,8 @@ func (s *Service) notifyAudience(n *News) {
 
 // --- FAQs (no scoping — one shared list; public read, admin write) ---
 
-func (s *Service) ListFAQs(ctx context.Context) ([]FAQ, error) {
-	return s.repo.ListFAQs(ctx)
+func (s *Service) ListFAQs(ctx context.Context, params httpx.ListParams) ([]FAQ, int64, error) {
+	return s.repo.ListFAQs(ctx, params)
 }
 
 func (s *Service) CreateFAQ(ctx context.Context, actor *identity.User, row *FAQ) error {

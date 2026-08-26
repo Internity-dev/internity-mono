@@ -93,10 +93,25 @@ func (r *Repository) DeleteNews(ctx context.Context, id int64) error {
 
 // --- FAQs ---
 
-func (r *Repository) ListFAQs(ctx context.Context) ([]FAQ, error) {
+func (r *Repository) ListFAQs(ctx context.Context, params httpx.ListParams) ([]FAQ, int64, error) {
+	scope := func(q *gorm.DB) *gorm.DB {
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("question ILIKE ? OR answer ILIKE ?", like, like)
+		}
+		return q
+	}
+	var total int64
+	if err := scope(r.db.WithContext(ctx).Model(&FAQ{})).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var rows []FAQ
-	err := r.db.WithContext(ctx).Order("sort_order, id").Find(&rows).Error
-	return rows, err
+	err := scope(r.db.WithContext(ctx).Model(&FAQ{})).
+		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (r *Repository) GetFAQ(ctx context.Context, id int64) (*FAQ, error) {

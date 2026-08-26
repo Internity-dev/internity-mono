@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
+import { useRoute } from 'vue-router'
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -9,16 +10,20 @@ import { toast } from 'vue-sonner'
 import { PlusIcon, PencilIcon, Trash2Icon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
+import { useListQuery } from '@/composables/useListQuery'
+import type { ApiSuccess } from '@/types/api'
 import type {
   CreatePresenceStatusPayload,
   PresenceStatus,
   PresenceStatusKind,
   PresenceStatusPatch,
 } from '@/types/internship'
-import { fetchPresenceStatuses } from '@/types/internship'
+import { normalizeKeys } from '@/types/internship'
 import { activeStatus, presenceStatusKind } from '@/lib/status'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
+import ListPagination from '@/components/shared/ListPagination.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import { Button } from '@/components/ui/button'
@@ -32,6 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 const auth = useAuthStore()
 const queryClient = useQueryClient()
+const route = useRoute()
 
 const KIND_OPTIONS: { value: PresenceStatusKind; label: string }[] = [
   { value: 'present', label: 'Present' },
@@ -42,26 +48,45 @@ const KIND_OPTIONS: { value: PresenceStatusKind; label: string }[] = [
 ]
 
 // --- school scope ---
-const schoolIdInput = ref<string>(auth.user?.school_id ? String(auth.user.school_id) : '')
+// Read straight from the route query (not `listQuery.filters`) so this
+// stays independent of `listQuery`'s own declaration below — its `enabled`
+// option needs it, and referencing the destructured/property result of the
+// same call it's part of would be a circular self-reference: `enabled`
+// would only resolve correctly once `listQuery` already exists, but
+// `listQuery` can't finish constructing until `enabled` is evaluated.
 const schoolId = computed(() => {
-  const n = Number(schoolIdInput.value)
-  return schoolIdInput.value !== '' && Number.isFinite(n) && n > 0 ? n : undefined
+  const raw = (route.query.school_id as string) ?? ''
+  const n = Number(raw)
+  return raw !== '' && Number.isFinite(n) && n > 0 ? n : undefined
 })
 
-const listQuery = useQuery({
-  queryKey: computed(() => ['presence-statuses', schoolId.value]),
-  // fetchPresenceStatuses (src/types/internship.ts) normalizes the backend's
-  // raw PascalCase response (PresenceStatus has no `json` tags server-side)
-  // to the snake_case shape this view consumes.
-  queryFn: () => fetchPresenceStatuses(schoolId.value as number),
-  enabled: computed(() => schoolId.value !== undefined),
+const listQuery = useListQuery<PresenceStatus, 'school_id'>(
+  'presence-statuses',
+  async (params) => {
+    // PresenceStatus (apps/api/.../internship/domain.go) has no `json`
+    // tags, so the raw response is PascalCase — normalizeKeys() converts
+    // it to the snake_case shape this view consumes.
+    const res = await http.get<ApiSuccess<unknown[]>>('/presence-statuses', { params })
+    return { ...res.data, data: normalizeKeys<PresenceStatus[]>(res.data.data) }
+  },
+  {
+    defaultSort: 'name',
+    defaultOrder: 'asc',
+    filters: ['school_id'],
+    enabled: () => schoolId.value !== undefined,
+  },
+)
+
+const schoolIdModel = computed<string>({
+  get: () => (route.query.school_id as string) ?? (auth.user?.school_id ? String(auth.user.school_id) : ''),
+  set: (v) => listQuery.setParams({ school_id: v || undefined }),
 })
 
-const items = computed(() => listQuery.data.value ?? [])
+const items = computed(() => listQuery.items.value)
 const usedKinds = computed(() => new Set(items.value.map((i) => i.kind)))
 
 const columns: Column[] = [
-  { key: 'name', label: 'Name' },
+  { key: 'name', label: 'Name', sortable: true },
   { key: 'kind', label: 'Kind' },
   { key: 'description', label: 'Description' },
   { key: 'is_active', label: 'Status' },
@@ -203,7 +228,7 @@ const deleteMutation = useMutation({
       <CardContent class="flex flex-wrap items-end gap-3">
         <div class="space-y-1.5">
           <Label for="school-id">School ID</Label>
-          <Input id="school-id" v-model="schoolIdInput" type="number" placeholder="e.g. 1" class="w-40" />
+          <Input id="school-id" v-model="schoolIdModel" type="number" placeholder="e.g. 1" class="w-40" />
         </div>
         <p class="pb-1.5 text-sm text-muted-foreground">
           A school needs a <strong>present</strong> status configured before students can check in.
@@ -211,12 +236,17 @@ const deleteMutation = useMutation({
       </CardContent>
     </Card>
 
+    <ListToolbar :model-value="listQuery.search.value" placeholder="Search presence statuses…" @update:model-value="(v) => listQuery.setParams({ search: v })" />
+
     <DataTable
       :columns="columns"
       :rows="items"
       :is-loading="listQuery.isLoading.value"
+      :sort="listQuery.sort.value"
+      :order="listQuery.order.value"
       empty-title="No presence statuses yet"
       empty-description="Create statuses like Hadir, Izin, Sakit, and Alpa for this school."
+      @sort="(key) => listQuery.setParams({ sort: key, order: listQuery.order.value === 'asc' ? 'desc' : 'asc' })"
     >
       <template #cell-kind="{ row }">
         <StatusBadge :tone="presenceStatusKind(row.kind).tone" :label="presenceStatusKind(row.kind).label" />
@@ -238,6 +268,13 @@ const deleteMutation = useMutation({
         </div>
       </template>
     </DataTable>
+
+    <ListPagination
+      :page="listQuery.page.value"
+      :limit="listQuery.limit.value"
+      :total="listQuery.pagination.value?.total ?? 0"
+      @update:page="(p) => listQuery.setParams({ page: p })"
+    />
 
     <Dialog v-model:open="dialogOpen">
       <DialogContent class="sm:max-w-lg">

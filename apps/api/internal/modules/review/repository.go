@@ -23,11 +23,16 @@ func NewRepository(db *gorm.DB) *Repository {
 
 func (r *Repository) ListMonitors(ctx context.Context, studentID *string, companyID *int64, params httpx.ListParams) ([]Monitor, int64, error) {
 	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Joins("JOIN users ON users.id = monitors.student_id")
 		if studentID != nil {
-			q = q.Where("student_id = ?", *studentID)
+			q = q.Where("monitors.student_id = ?", *studentID)
 		}
 		if companyID != nil {
-			q = q.Where("company_id = ?", *companyID)
+			q = q.Where("monitors.company_id = ?", *companyID)
+		}
+		if params.Search != "" {
+			like := "%" + params.Search + "%"
+			q = q.Where("users.name ILIKE ? OR users.nis ILIKE ? OR monitors.notes ILIKE ? OR monitors.suggest ILIKE ?", like, like, like, like)
 		}
 		return q
 	}
@@ -37,7 +42,7 @@ func (r *Repository) ListMonitors(ctx context.Context, studentID *string, compan
 	}
 	var rows []Monitor
 	err := scope(r.db.WithContext(ctx).Model(&Monitor{})).
-		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+		Order("monitors." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -66,10 +71,25 @@ func (r *Repository) DeleteMonitor(ctx context.Context, id int64) error {
 
 // --- Questions ---
 
-func (r *Repository) ListQuestions(ctx context.Context, schoolID int64) ([]Question, error) {
+func (r *Repository) ListQuestions(ctx context.Context, schoolID int64, params httpx.ListParams) ([]Question, int64, error) {
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("school_id = ?", schoolID)
+		if params.Search != "" {
+			q = q.Where("question ILIKE ?", "%"+params.Search+"%")
+		}
+		return q
+	}
+	var total int64
+	if err := scope(r.db.WithContext(ctx).Model(&Question{})).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var rows []Question
-	err := r.db.WithContext(ctx).Where("school_id = ?", schoolID).Order("sort_order, id").Find(&rows).Error
-	return rows, err
+	err := scope(r.db.WithContext(ctx).Model(&Question{})).
+		Order(params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
 }
 
 func (r *Repository) GetQuestion(ctx context.Context, id int64) (*Question, error) {

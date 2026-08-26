@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -8,11 +8,14 @@ import axios from 'axios'
 import { toast } from 'vue-sonner'
 import { PlusIcon, PencilIcon, Trash2Icon } from '@lucide/vue'
 import { http } from '@/lib/http'
+import { useListQuery } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { CreateFaqPayload, Faq, FaqPatch } from '@/types/content'
 import { normalizeKeys } from '@/types/content'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
+import ListPagination from '@/components/shared/ListPagination.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,22 +25,20 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 const queryClient = useQueryClient()
 
-const listQuery = useQuery({
-  queryKey: ['faqs'],
-  queryFn: async () => {
-    // FAQ (apps/api/.../content/domain.go) carries no `json` tags, so the
-    // raw response is PascalCase — normalizeKeys() converts it to the
-    // snake_case shape this view consumes.
-    const res = await http.get<ApiSuccess<unknown[]>>('/faqs')
-    return normalizeKeys<Faq[]>(res.data.data)
-  },
-})
+const listQuery = useListQuery<Faq>('faqs', async (params) => {
+  // FAQ (apps/api/.../content/domain.go) carries no `json` tags, so the raw
+  // response is PascalCase — normalizeKeys() converts it to the snake_case
+  // shape this view consumes. Already ordered by sort_order server-side, no
+  // client-side re-sort needed.
+  const res = await http.get<ApiSuccess<unknown[]>>('/faqs', { params })
+  return { ...res.data, data: normalizeKeys<Faq[]>(res.data.data) }
+}, { defaultSort: 'sort_order', defaultOrder: 'asc' })
 
-const items = computed(() => [...(listQuery.data.value ?? [])].sort((a, b) => a.sort_order - b.sort_order))
+const items = computed(() => listQuery.items.value)
 
 const columns: Column[] = [
-  { key: 'sort_order', label: 'Order' },
-  { key: 'question', label: 'Question' },
+  { key: 'sort_order', label: 'Order', sortable: true },
+  { key: 'question', label: 'Question', sortable: true },
   { key: 'answer', label: 'Answer' },
   { key: 'actions', label: '' },
 ]
@@ -68,7 +69,7 @@ const [sortOrder, sortOrderAttrs] = defineField('sort_order')
 
 function openCreate() {
   editing.value = null
-  resetForm({ values: { question: '', answer: '', sort_order: items.value.length } })
+  resetForm({ values: { question: '', answer: '', sort_order: listQuery.pagination.value?.total ?? items.value.length } })
   dialogOpen.value = true
 }
 
@@ -140,12 +141,17 @@ const deleteMutation = useMutation({
       </template>
     </PageHeader>
 
+    <ListToolbar :model-value="listQuery.search.value" placeholder="Search FAQs…" @update:model-value="(v) => listQuery.setParams({ search: v })" />
+
     <DataTable
       :columns="columns"
       :rows="items"
       :is-loading="listQuery.isLoading.value"
+      :sort="listQuery.sort.value"
+      :order="listQuery.order.value"
       empty-title="No FAQs yet"
       empty-description="Add the questions applicants and students ask most often."
+      @sort="(key) => listQuery.setParams({ sort: key, order: listQuery.order.value === 'asc' ? 'desc' : 'asc' })"
     >
       <template #cell-sort_order="{ row }">
         <span class="tabular-nums text-muted-foreground">{{ row.sort_order }}</span>
@@ -164,6 +170,13 @@ const deleteMutation = useMutation({
         </div>
       </template>
     </DataTable>
+
+    <ListPagination
+      :page="listQuery.page.value"
+      :limit="listQuery.limit.value"
+      :total="listQuery.pagination.value?.total ?? 0"
+      @update:page="(p) => listQuery.setParams({ page: p })"
+    />
 
     <Dialog v-model:open="dialogOpen">
       <DialogContent class="sm:max-w-lg">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -15,6 +16,7 @@ import { approvalStatus } from '@/lib/status'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import { Button } from '@/components/ui/button'
@@ -26,18 +28,16 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const queryClient = useQueryClient()
+const route = useRoute()
 
 // --- placements / company switcher ---
 const placementsQuery = useQuery({ queryKey: ['my-placements'], queryFn: fetchMyPlacements })
 const placements = computed(() => placementsQuery.data.value ?? [])
-const selectedCompanyId = ref<number | undefined>(undefined)
-watch(
-  placements,
-  (list) => {
-    if (selectedCompanyId.value === undefined && list.length > 0) selectedCompanyId.value = list[0]?.company_id
-  },
-  { immediate: true },
-)
+// Read straight from the route query (not `journalsList.filters`) so this
+// stays independent of `journalsList`'s own declaration further below — its
+// `enabled` option needs this value, and referencing the destructured
+// result of the same call it's part of would be a circular self-reference.
+const selectedCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
@@ -48,7 +48,7 @@ function truncate(value: string | null, len = 80) {
 }
 
 // --- history ---
-const journalsList = useListQuery<Journal>(
+const journalsList = useListQuery<Journal, 'company_id'>(
   'journals',
   async (params) => {
     const res = await http.get<ApiSuccess<Journal[]>>('/journals', { params })
@@ -57,10 +57,30 @@ const journalsList = useListQuery<Journal>(
   {
     defaultSort: 'date',
     defaultOrder: 'desc',
-    extraParams: () => ({ company_id: selectedCompanyId.value }),
+    filters: ['company_id'],
     enabled: () => selectedCompanyId.value !== undefined,
   },
 )
+
+// A student with only one placement never sees the switcher, so default the
+// URL to their (only, or first) placement once loaded.
+watch(
+  placements,
+  (list) => {
+    if (selectedCompanyId.value === undefined && list.length > 0) journalsList.setParams({ company_id: list[0]?.company_id })
+  },
+  { immediate: true },
+)
+
+const companyModel = computed<number | undefined>({
+  get: () => selectedCompanyId.value,
+  set: (v) => journalsList.setParams({ company_id: v }),
+})
+
+const searchModel = computed<string>({
+  get: () => journalsList.search.value,
+  set: (v) => journalsList.setParams({ search: v }),
+})
 
 const columns: Column[] = [
   { key: 'date', label: 'Date', sortable: true },
@@ -169,7 +189,7 @@ const onSubmit = handleSubmit((values) => {
     <template v-else>
       <div v-if="placements.length > 1" class="flex items-center gap-2">
         <Building2Icon class="size-4 text-muted-foreground" />
-        <Select v-model="selectedCompanyId">
+        <Select v-model="companyModel">
           <SelectTrigger class="w-64">
             <SelectValue placeholder="Select a placement" />
           </SelectTrigger>
@@ -178,6 +198,8 @@ const onSubmit = handleSubmit((values) => {
           </SelectContent>
         </Select>
       </div>
+
+      <ListToolbar v-model="searchModel" placeholder="Search work type or description…" />
 
       <DataTable
         :columns="columns"

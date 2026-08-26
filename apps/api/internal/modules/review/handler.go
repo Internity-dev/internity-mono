@@ -20,6 +20,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 var monitorSortColumns = map[string]bool{"date": true, "created_at": true}
+var questionSortColumns = map[string]bool{"sort_order": true, "question": true, "created_at": true}
 
 func idParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -105,12 +106,13 @@ func (h *Handler) ListQuestions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := h.svc.ListQuestions(c.Request.Context(), middleware.CurrentUser(c), schoolID)
+	params := httpx.ParseListParams(c, "sort_order", questionSortColumns)
+	rows, total, err := h.svc.ListQuestions(c.Request.Context(), middleware.CurrentUser(c), schoolID, params)
 	if err != nil {
 		httpx.FailFromErr(c, err)
 		return
 	}
-	httpx.OK(c, http.StatusOK, rows, "OK", nil)
+	httpx.OK(c, http.StatusOK, rows, "OK", &httpx.Pagination{Page: params.Page, Limit: params.Limit, Total: total})
 }
 
 type createQuestionRequest struct {

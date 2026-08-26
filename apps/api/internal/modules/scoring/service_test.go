@@ -43,14 +43,14 @@ func requireAPIErr(t *testing.T, err error, code httpx.ErrorCode) {
 func TestListScores_OtherStudentForbidden(t *testing.T) {
 	svc := newTestService(fakeCompanyScope{})
 	student := &identity.User{Role: identity.RoleStudent, ID: "student-1"}
-	_, err := svc.ListScores(context.Background(), student, "student-2", 1)
+	_, _, err := svc.ListScores(context.Background(), student, "student-2", 1, httpx.ListParams{})
 	requireAPIErr(t, err, httpx.ErrForbidden)
 }
 
 func TestListScores_NonStudentMustManageCompany(t *testing.T) {
 	svc := newTestService(fakeCompanyScope{})
 	mentor := &identity.User{Role: identity.RoleMentor, CompanyID: int64Ptr(5)}
-	_, err := svc.ListScores(context.Background(), mentor, "student-1", 6)
+	_, _, err := svc.ListScores(context.Background(), mentor, "student-1", 6, httpx.ListParams{})
 	requireAPIErr(t, err, httpx.ErrForbidden)
 }
 
@@ -75,7 +75,7 @@ func TestCreateScore_RangeValidation(t *testing.T) {
 func TestListScorePredicates_ViewSchoolGate(t *testing.T) {
 	svc := newTestService(fakeCompanyScope{})
 	coordinator := &identity.User{Role: identity.RoleCoordinator, SchoolID: int64Ptr(5)}
-	_, err := svc.ListScorePredicates(context.Background(), coordinator, 6)
+	_, _, err := svc.ListScorePredicates(context.Background(), coordinator, 6, httpx.ListParams{})
 	requireAPIErr(t, err, httpx.ErrForbidden)
 }
 

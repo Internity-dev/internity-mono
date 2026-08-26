@@ -56,23 +56,30 @@ const schoolNameById = computed(() => {
 
 // --- list query, scoped by school ---
 
-const schoolFilter = ref<string>('all')
-
-const { items, pagination, page, limit, search, sort, order, setParams, isLoading, isError, refetch } =
-  useListQuery<Department>(
+const { items, pagination, page, limit, search, sort, order, filters, setParams, isLoading, isError, refetch } =
+  useListQuery<Department, 'school_id'>(
     'departments',
     async (params) => {
-      const res = await http.get<ApiSuccess<Department[]>>('/departments', { params })
+      // A coordinator is always scoped to their own school regardless of
+      // the URL's school_id — only an admin's choice is honored.
+      const res = await http.get<ApiSuccess<Department[]>>('/departments', {
+        params: { ...params, school_id: isAdmin.value ? params.school_id : auth.user?.school_id },
+      })
       return res.data
     },
     {
       defaultSort: 'name',
       defaultOrder: 'asc',
-      extraParams: () => ({
-        school_id: isAdmin.value ? (schoolFilter.value === 'all' ? undefined : Number(schoolFilter.value)) : auth.user?.school_id,
-      }),
+      filters: ['school_id'],
     },
   )
+
+// Only an admin sees the school filter at all — a coordinator is always
+// scoped to their own school regardless of the URL.
+const schoolFilterModel = computed<string>({
+  get: () => filters.value.school_id ?? 'all',
+  set: (v) => setParams({ school_id: v === 'all' ? undefined : v }),
+})
 
 interface TableColumn {
   key: string
@@ -267,7 +274,7 @@ function confirmDelete() {
     </PageHeader>
 
     <ListToolbar :model-value="search" placeholder="Search departments…" @update:model-value="(v) => setParams({ search: v })">
-      <Select v-if="isAdmin" v-model="schoolFilter">
+      <Select v-if="isAdmin" v-model="schoolFilterModel">
         <SelectTrigger class="w-48">
           <SelectValue placeholder="All schools" />
         </SelectTrigger>

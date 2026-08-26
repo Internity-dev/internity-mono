@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -8,7 +9,7 @@ import { toast } from 'vue-sonner'
 import { PlusIcon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
-import { useListQuery, type ListParams } from '@/composables/useListQuery'
+import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
 import type { ApiSuccess } from '@/types/api'
 import type { Vacancy, VacancyStatus } from '@/types/vacancy'
 import { vacancyStatus } from '@/lib/status'
@@ -43,13 +44,14 @@ function errMessage(err: unknown): string {
 
 const auth = useAuthStore()
 const isMentor = computed(() => auth.user?.role === 'mentor')
+const route = useRoute()
 
-const departmentId = ref<number>()
-const companyId = ref<number>()
-
-watch(departmentId, () => {
-  companyId.value = undefined
-})
+// department_id is a UI-only cascade key (narrows the company picker, never
+// itself sent to /vacancies); company_id is resolved to effectiveCompanyId
+// below (a mentor's own company overrides whatever's in the URL) before
+// being sent, so it's also read directly rather than auto-forwarded.
+const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -71,19 +73,17 @@ const companiesQuery = useQuery({
   enabled: computed(() => !isMentor.value && !!departmentId.value),
 })
 
-const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : companyId.value))
+const effectiveCompanyId = computed<number | undefined>(() => (isMentor.value ? auth.user?.company_id : urlCompanyId.value))
 
 const departmentModel = computed<string | undefined>({
   get: () => (departmentId.value ? String(departmentId.value) : undefined),
-  set: (v) => {
-    departmentId.value = v ? Number(v) : undefined
-  },
+  // Changing department resets company in the same atomic URL update — no
+  // separate watcher needed.
+  set: (v) => list.setParams({ department_id: v, company_id: undefined }),
 })
 const companyModel = computed<string | undefined>({
-  get: () => (companyId.value ? String(companyId.value) : undefined),
-  set: (v) => {
-    companyId.value = v ? Number(v) : undefined
-  },
+  get: () => (urlCompanyId.value ? String(urlCompanyId.value) : undefined),
+  set: (v) => list.setParams({ company_id: v }),
 })
 
 const companyNameQuery = useQuery({
@@ -97,12 +97,12 @@ const pageDescription = computed(() =>
 
 // --- vacancy list --------------------------------------------------------
 
-function fetchVacancies(params: ListParams & Record<string, string | number | undefined>) {
-  return http.get<ApiSuccess<Vacancy[]>>('/vacancies', { params }).then((r) => r.data)
+function fetchVacancies(params: FetcherParams<'department_id' | 'company_id'>) {
+  return http.get<ApiSuccess<Vacancy[]>>('/vacancies', { params: { ...params, company_id: effectiveCompanyId.value } }).then((r) => r.data)
 }
 
-const list = useListQuery<Vacancy>('vacancies', fetchVacancies, {
-  extraParams: () => ({ company_id: effectiveCompanyId.value }),
+const list = useListQuery<Vacancy, 'department_id' | 'company_id'>('vacancies', fetchVacancies, {
+  filters: [{ key: 'department_id', sendToFetcher: false }, { key: 'company_id', sendToFetcher: false }],
   enabled: () => !!effectiveCompanyId.value,
 })
 
