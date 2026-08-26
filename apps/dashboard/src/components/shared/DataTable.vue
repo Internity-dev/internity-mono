@@ -1,4 +1,5 @@
 <script setup lang="ts" generic="T extends object">
+import { computed } from 'vue'
 import { ArrowDownIcon, ArrowUpIcon } from '@lucide/vue'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,9 +20,19 @@ const props = defineProps<{
   order?: 'asc' | 'desc'
   emptyTitle?: string
   emptyDescription?: string
+  /** The active search term, if this list has a search box. When set and
+   * `rows` is empty, the empty state shows a "no results for '…'" message
+   * with a "Clear search" action instead of the view's zero-data copy —
+   * those two situations read very differently to the user. */
+  search?: string
 }>()
 
-defineEmits<{ sort: [key: string] }>()
+defineEmits<{ sort: [key: string]; 'clear-search': [] }>()
+
+// Only branch into the "search matched nothing" copy when a search is
+// actually active — an empty/undefined search falls back to the view's own
+// emptyTitle/emptyDescription (the true zero-data case).
+const isFilteredEmpty = computed(() => !!props.search)
 
 defineSlots<{
   [key: `cell-${string}`]: (props: { row: T }) => unknown
@@ -63,7 +74,14 @@ function cellValue(row: T, key: string): unknown {
         </template>
         <TableRow v-else-if="rows.length === 0">
           <TableCell :colspan="columns.length">
-            <EmptyState :title="emptyTitle ?? 'No results'" :description="emptyDescription" />
+            <EmptyState
+              v-if="isFilteredEmpty"
+              :title="`No results for '${search}'`"
+              description="Try a different search term."
+              action-label="Clear search"
+              @action="$emit('clear-search')"
+            />
+            <EmptyState v-else :title="emptyTitle ?? 'No results'" :description="emptyDescription" />
           </TableCell>
         </TableRow>
         <TableRow v-for="(row, i) in rows" v-else :key="i">

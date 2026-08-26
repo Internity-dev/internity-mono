@@ -78,6 +78,39 @@ describe('dataTable', () => {
     expect(bodyRows[0]?.text()).toContain('Alice')
   })
 
+  it('shows a "no results for" message and Clear search action when a search is active and rows are empty', () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        columns,
+        rows: [] as Row[],
+        search: 'zzzzz',
+        emptyTitle: 'No students yet',
+        emptyDescription: 'Invite one to get started.',
+      },
+    })
+    expect(wrapper.text()).toContain("No results for 'zzzzz'")
+    expect(wrapper.text()).not.toContain('No students yet')
+    const button = wrapper.find('button')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toBe('Clear search')
+  })
+
+  it('emits "clear-search" when the Clear search action is clicked', async () => {
+    const wrapper = mount(DataTable, {
+      props: { columns, rows: [] as Row[], search: 'zzzzz' },
+    })
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.emitted('clear-search')).toHaveLength(1)
+  })
+
+  it('falls back to the view-supplied empty copy when there is no active search', () => {
+    const wrapper = mount(DataTable, {
+      props: { columns, rows: [] as Row[], emptyTitle: 'No students yet' },
+    })
+    expect(wrapper.text()).toContain('No students yet')
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+
   it('emits "sort" with the column key when a sortable header is clicked', async () => {
     const wrapper = mount(DataTable, { props: { columns, rows } })
     const headers = wrapper.findAll('th')

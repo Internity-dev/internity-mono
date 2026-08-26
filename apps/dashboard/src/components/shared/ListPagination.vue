@@ -12,8 +12,13 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:page': [page: number] }>()
 
 const lastPage = computed(() => Math.max(1, Math.ceil(props.total / props.limit)))
-const rangeStart = computed(() => (props.total === 0 ? 0 : (props.page - 1) * props.limit + 1))
-const rangeEnd = computed(() => Math.min(props.page * props.limit, props.total))
+// `page` can land outside [1, lastPage] — a stale bookmark, a hand-edited
+// URL, or Back after deletions shrank the result count. Clamp to the
+// nearest valid page before doing any range math so we render "showing the
+// last valid page" instead of a nonsensical range like "19961–20 of 20".
+const effectivePage = computed(() => Math.min(Math.max(props.page, 1), lastPage.value))
+const rangeStart = computed(() => (props.total === 0 ? 0 : (effectivePage.value - 1) * props.limit + 1))
+const rangeEnd = computed(() => Math.min(effectivePage.value * props.limit, props.total))
 </script>
 
 <template>
@@ -32,7 +37,7 @@ const rangeEnd = computed(() => Math.min(props.page * props.limit, props.total))
         <ChevronLeftIcon class="size-4" />
         Previous
       </Button>
-      <span class="text-sm text-muted-foreground">Page {{ page }} of {{ lastPage }}</span>
+      <span class="text-sm text-muted-foreground">Page {{ effectivePage }} of {{ lastPage }}</span>
       <Button
         variant="outline"
         size="sm"

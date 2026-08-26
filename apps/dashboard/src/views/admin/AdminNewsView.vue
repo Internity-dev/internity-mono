@@ -16,6 +16,7 @@ import { normalizeKeys } from '@/types/content'
 import { newsStatus } from '@/lib/status'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
+import ListToolbar from '@/components/shared/ListToolbar.vue'
 import ListPagination from '@/components/shared/ListPagination.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -213,15 +214,19 @@ function formatDate(value: string | null) {
       </template>
     </PageHeader>
 
+    <ListToolbar :model-value="listQuery.search.value" placeholder="Search news…" @update:model-value="(v) => listQuery.setParams({ search: v })" />
+
     <DataTable
       :columns="columns"
       :rows="listQuery.items.value"
       :is-loading="listQuery.isLoading.value"
       :sort="listQuery.sort.value"
       :order="listQuery.order.value"
+      :search="listQuery.search.value"
       empty-title="No news posts yet"
       empty-description="Create your first announcement. Save it as a draft or publish immediately."
       @sort="(key) => listQuery.setParams({ sort: key, order: listQuery.order.value === 'asc' ? 'desc' : 'asc' })"
+      @clear-search="listQuery.setParams({ search: '' })"
     >
       <template #cell-scope="{ row }">
         <StatusBadge tone="info" :label="row.scope_type === 'school' ? 'School' : 'Department'" />

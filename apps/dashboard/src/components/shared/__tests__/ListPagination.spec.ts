@@ -57,4 +57,18 @@ describe('listPagination', () => {
     const wrapper = mount(ListPagination, { props: { page: 1, limit: 10, total: 5 } })
     expect(wrapper.text()).toContain('Page 1 of 1')
   })
+
+  it('clamps an out-of-range page to the last valid page for the range text and label', () => {
+    const wrapper = mount(ListPagination, { props: { page: 999, limit: 20, total: 20 } })
+    expect(wrapper.text()).toContain('1–20')
+    expect(wrapper.text()).not.toContain('19961')
+    expect(wrapper.text()).toContain('Page 1 of 1')
+  })
+
+  it('disables Next (but not Previous) when clamping an out-of-range page', () => {
+    const wrapper = mount(ListPagination, { props: { page: 999, limit: 20, total: 20 } })
+    const buttons = wrapper.findAll('button')
+    expect(buttons[0]?.attributes('disabled')).toBeUndefined()
+    expect(buttons[1]?.attributes('disabled')).toBeDefined()
+  })
 })
