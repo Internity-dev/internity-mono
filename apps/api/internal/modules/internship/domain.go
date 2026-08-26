@@ -88,8 +88,14 @@ func (PresenceStatus) TableName() string { return "presence_statuses" }
 // --- Presence ---
 
 type Presence struct {
-	ID               int64      `gorm:"column:id;primaryKey" json:"id"`
-	UserID           string     `gorm:"column:user_id" json:"user_id"`
+	ID     int64  `gorm:"column:id;primaryKey" json:"id"`
+	UserID string `gorm:"column:user_id" json:"user_id"`
+	// UserName/UserNIS are only ever populated by ListPresencesForApproval's
+	// join against users (the `->` tag makes them read-only, so Save/Create
+	// never try to write these non-existent columns back to `presences`) —
+	// every other query path leaves them at their zero value.
+	UserName         string     `gorm:"column:user_name;->" json:"user_name,omitempty"`
+	UserNIS          *string    `gorm:"column:user_nis;->" json:"user_nis,omitempty"`
 	CompanyID        int64      `gorm:"column:company_id" json:"company_id"`
 	PresenceStatusID int64      `gorm:"column:presence_status_id" json:"presence_status_id"`
 	Date             time.Time  `gorm:"column:date" json:"date"`
@@ -109,8 +115,14 @@ func (Presence) TableName() string { return "presences" }
 // --- Journal ---
 
 type Journal struct {
-	ID          int64     `gorm:"column:id;primaryKey" json:"id"`
-	UserID      string    `gorm:"column:user_id" json:"user_id"`
+	ID     int64  `gorm:"column:id;primaryKey" json:"id"`
+	UserID string `gorm:"column:user_id" json:"user_id"`
+	// UserName/UserNIS are only ever populated by ListJournalsForApproval's
+	// join against users (the `->` tag makes them read-only, so Save/Create
+	// never try to write these non-existent columns back to `journals`) —
+	// every other query path leaves them at their zero value.
+	UserName    string    `gorm:"column:user_name;->" json:"user_name,omitempty"`
+	UserNIS     *string   `gorm:"column:user_nis;->" json:"user_nis,omitempty"`
 	CompanyID   int64     `gorm:"column:company_id" json:"company_id"`
 	Date        time.Time `gorm:"column:date" json:"date"`
 	WorkType    *string   `gorm:"column:work_type" json:"work_type"`

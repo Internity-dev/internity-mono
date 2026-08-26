@@ -6,6 +6,7 @@ import { toast } from 'vue-sonner'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
+import { useLastOrgScope } from '@/composables/useLastOrgScope'
 import type { ApiSuccess } from '@/types/api'
 import type { Presence, BulkApproveResult } from '@/types/internship'
 import { approvalStatus } from '@/lib/status'
@@ -52,8 +53,17 @@ const auth = useAuthStore()
 const isMentor = computed(() => auth.user?.role === 'mentor')
 const route = useRoute()
 
-const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
-const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+const lastScope = useLastOrgScope()
+const departmentId = computed(() => lastScope.departmentDefault(route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => lastScope.companyDefault(route.query.company_id ? Number(route.query.company_id) : undefined, departmentId.value))
+
+// Remembers whatever the staff picker lands on (explicit pick or a
+// remembered default resolved above) so the next cascading page defaults to
+// the same department/company — mentors never see this picker, so their
+// company (always their own, never chosen) shouldn't overwrite it.
+watch([departmentId, urlCompanyId], ([d, c]) => {
+  if (!isMentor.value) lastScope.remember(d, c)
+})
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -212,8 +222,10 @@ const bulkApproveMutation = useMutation({
         </div>
         <div class="w-56 space-y-1.5">
           <label class="text-sm font-medium">Company</label>
-          <Select v-model="companyModel" :disabled="!departmentId">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Select company" /></SelectTrigger>
+          <Select v-model="companyModel" :disabled="!departmentId || companiesQuery.isFetching.value">
+            <SelectTrigger class="w-full">
+              <SelectValue :placeholder="companiesQuery.isFetching.value ? 'Loading…' : 'Select company'" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="c in companiesQuery.data.value ?? []" :key="c.id" :value="String(c.id)">
                 {{ c.name }}
@@ -255,7 +267,10 @@ const bulkApproveMutation = useMutation({
           />
         </template>
         <template #cell-user="{ row }">
-          <span class="font-mono text-xs" :title="row.user_id">{{ shortId(row.user_id) }}</span>
+          <div class="flex flex-col">
+            <span class="font-medium text-foreground">{{ row.user_name || 'Unknown student' }}</span>
+            <span class="font-mono text-xs text-muted-foreground" :title="row.user_id">{{ row.user_nis || shortId(row.user_id) }}</span>
+          </div>
         </template>
         <template #cell-date="{ row }">{{ formatDate(row.date) }}</template>
         <template #cell-checkin="{ row }">{{ formatTime(row.check_in_at) }}</template>

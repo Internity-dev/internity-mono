@@ -1,6 +1,11 @@
 export interface Presence {
   id: number
   user_id: string
+  // Only populated by GET /presences/pending-approval (its join against
+  // users) — absent (omitempty backend-side) from every other endpoint that
+  // returns a Presence.
+  user_name?: string
+  user_nis?: string | null
   company_id: number
   presence_status_id: number
   date: string
@@ -18,6 +23,11 @@ export interface Presence {
 export interface Journal {
   id: number
   user_id: string
+  // Only populated by GET /journals/pending-approval (its join against
+  // users) — absent (omitempty backend-side) from every other endpoint that
+  // returns a Journal.
+  user_name?: string
+  user_nis?: string | null
   company_id: number
   date: string
   work_type: string | null

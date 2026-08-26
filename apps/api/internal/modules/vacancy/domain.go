@@ -60,8 +60,14 @@ var allowedTransitions = map[ApplianceStatus][]ApplianceStatus{
 }
 
 type Appliance struct {
-	ID        int64           `gorm:"column:id;primaryKey" json:"id"`
-	UserID    string          `gorm:"column:user_id" json:"user_id"`
+	ID     int64  `gorm:"column:id;primaryKey" json:"id"`
+	UserID string `gorm:"column:user_id" json:"user_id"`
+	// UserName/UserNIS are only ever populated by ListAppliancesForVacancy's
+	// join against users (the `->` tag makes them read-only, so Save/Create
+	// never try to write these non-existent columns back to `appliances`) —
+	// every other query path leaves them at their zero value.
+	UserName  string          `gorm:"column:user_name;->" json:"user_name,omitempty"`
+	UserNIS   *string         `gorm:"column:user_nis;->" json:"user_nis,omitempty"`
 	VacancyID int64           `gorm:"column:vacancy_id" json:"vacancy_id"`
 	Status    ApplianceStatus `gorm:"column:status" json:"status"`
 	Message   *string         `gorm:"column:message" json:"message"`

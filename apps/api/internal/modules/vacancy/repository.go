@@ -177,6 +177,7 @@ func (r *Repository) ListAppliancesForVacancy(ctx context.Context, vacancyID int
 	}
 	var rows []Appliance
 	err := scope(r.db.WithContext(ctx).Model(&Appliance{})).
+		Select("appliances.*, users.name AS user_name, users.nis AS user_nis").
 		Order("appliances." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err

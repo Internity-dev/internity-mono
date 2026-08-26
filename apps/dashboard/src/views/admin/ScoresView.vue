@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -10,6 +10,7 @@ import { PlusIcon, StarIcon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
+import { useLastOrgScope } from '@/composables/useLastOrgScope'
 import type { ApiSuccess } from '@/types/api'
 import type { Score, ScoreType } from '@/types/scoring'
 import type { Review, CreateReviewPayload } from '@/types/review'
@@ -53,9 +54,18 @@ const route = useRoute()
 // stay independent of `scoresList`'s own declaration further below — its
 // `enabled` option needs them, and referencing the destructured result of
 // the same call it's part of would be a circular self-reference.
-const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
-const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+const lastScope = useLastOrgScope()
+const departmentId = computed(() => lastScope.departmentDefault(route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => lastScope.companyDefault(route.query.company_id ? Number(route.query.company_id) : undefined, departmentId.value))
 const studentId = computed(() => (route.query.student_id as string) ?? '')
+
+// Remembers whatever the staff picker lands on (explicit pick or a
+// remembered default resolved above) so the next cascading page defaults to
+// the same department/company — mentors never see this picker, so their
+// company (always their own, never chosen) shouldn't overwrite it.
+watch([departmentId, urlCompanyId], ([d, c]) => {
+  if (!isMentor.value) lastScope.remember(d, c)
+})
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -275,8 +285,10 @@ const onSubmitReview = reviewForm.handleSubmit((values) =>
         </div>
         <div v-if="!isMentor" class="w-56 space-y-1.5">
           <label class="text-sm font-medium">Company</label>
-          <Select v-model="companyModel" :disabled="!departmentId">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Select company" /></SelectTrigger>
+          <Select v-model="companyModel" :disabled="!departmentId || companiesQuery.isFetching.value">
+            <SelectTrigger class="w-full">
+              <SelectValue :placeholder="companiesQuery.isFetching.value ? 'Loading…' : 'Select company'" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="c in companiesQuery.data.value ?? []" :key="c.id" :value="String(c.id)">
                 {{ c.name }}

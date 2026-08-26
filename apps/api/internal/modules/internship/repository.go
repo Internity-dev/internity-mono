@@ -230,6 +230,7 @@ func (r *Repository) ListPresencesForApproval(ctx context.Context, companyID int
 	}
 	var rows []Presence
 	err := scope(r.db.WithContext(ctx).Model(&Presence{})).
+		Select("presences.*, users.name AS user_name, users.nis AS user_nis").
 		Order("presences." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err
@@ -313,6 +314,7 @@ func (r *Repository) ListJournalsForApproval(ctx context.Context, companyID int6
 	}
 	var rows []Journal
 	err := scope(r.db.WithContext(ctx).Model(&Journal{})).
+		Select("journals.*, users.name AS user_name, users.nis AS user_nis").
 		Order("journals." + params.Sort + " " + params.Order).Limit(params.Limit).Offset(params.Offset()).Find(&rows).Error
 	if err != nil {
 		return nil, 0, err

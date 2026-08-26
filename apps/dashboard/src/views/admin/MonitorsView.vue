@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { useForm } from 'vee-validate'
@@ -11,6 +11,7 @@ import { PlusIcon, Trash2Icon, StarIcon } from '@lucide/vue'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useListQuery } from '@/composables/useListQuery'
+import { useLastOrgScope } from '@/composables/useLastOrgScope'
 import type { ApiSuccess } from '@/types/api'
 import type { CreateMonitorPayload, Monitor } from '@/types/review'
 import { normalizeKeys } from '@/types/review'
@@ -40,6 +41,7 @@ interface Company {
 }
 
 const auth = useAuthStore()
+const isAdmin = computed(() => auth.user?.role === 'admin')
 const queryClient = useQueryClient()
 const route = useRoute()
 
@@ -48,9 +50,23 @@ const route = useRoute()
 // stay independent of `listQuery`'s own declaration below — its `enabled`
 // option needs them, and referencing the destructured result of the same
 // call it's part of would be a circular self-reference.
-const schoolId = computed(() => (route.query.school_id ? Number(route.query.school_id) : undefined))
-const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
-const companyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+//
+// A coordinator's school picker has zero effect: /monitors itself doesn't
+// even take a school_id (review/service.go's ListMonitors only scopes by
+// company/student), and school_id here only feeds the /departments picker
+// call below, which pins a non-admin to their own school regardless of what
+// school_id is requested (see orgs/service.go's scopedSchoolFilter). So,
+// like DepartmentsView/CompaniesView, it's hidden for them entirely and
+// school_id is pinned to their own school rather than read from the URL.
+const lastScope = useLastOrgScope()
+const schoolId = computed(() => (isAdmin.value ? (route.query.school_id ? Number(route.query.school_id) : undefined) : auth.user?.school_id))
+const departmentId = computed(() => lastScope.departmentDefault(route.query.department_id ? Number(route.query.department_id) : undefined))
+const companyId = computed(() => lastScope.companyDefault(route.query.company_id ? Number(route.query.company_id) : undefined, departmentId.value))
+
+// Remembers whatever the picker lands on (explicit pick or a remembered
+// default resolved above) so the next cascading page defaults to the same
+// department/company.
+watch([departmentId, companyId], ([d, c]) => lastScope.remember(d, c))
 
 const departmentsQuery = useQuery({
   queryKey: computed(() => ['departments-picker', schoolId.value]),
@@ -83,26 +99,34 @@ const listQuery = useListQuery<Monitor, 'school_id' | 'department_id' | 'company
     // Monitor (apps/api/.../review/domain.go) carries no `json` tags, so the
     // raw response is PascalCase — normalize just the `data` payload, the
     // envelope itself (success/data/message/meta) is already snake_case.
-    const res = await http.get<ApiSuccess<unknown[]>>('/monitors', { params })
+    // company_id is sent explicitly from `companyId` (not auto-forwarded from
+    // the URL, hence sendToFetcher: false below) since it may be a remembered
+    // default that was never actually written to the URL.
+    const res = await http.get<ApiSuccess<unknown[]>>('/monitors', { params: { ...params, company_id: companyId.value } })
     return { ...res.data, data: normalizeKeys<Monitor[]>(res.data.data) }
   },
   {
     defaultSort: 'date',
-    filters: [{ key: 'school_id', sendToFetcher: false }, { key: 'department_id', sendToFetcher: false }, 'company_id', 'student_id'],
+    filters: [
+      { key: 'school_id', sendToFetcher: false },
+      { key: 'department_id', sendToFetcher: false },
+      { key: 'company_id', sendToFetcher: false },
+      'student_id',
+    ],
     enabled: () => companyId.value !== undefined || !!route.query.student_id,
   },
 )
 
 const schoolIdModel = computed<string>({
-  get: () => listQuery.filters.value.school_id ?? (auth.user?.school_id ? String(auth.user.school_id) : ''),
+  get: () => (schoolId.value ? String(schoolId.value) : ''),
   set: (v) => listQuery.setParams({ school_id: v || undefined, department_id: undefined, company_id: undefined }),
 })
 const departmentModel = computed<string | undefined>({
-  get: () => listQuery.filters.value.department_id,
+  get: () => (departmentId.value ? String(departmentId.value) : undefined),
   set: (v) => listQuery.setParams({ department_id: v, company_id: undefined }),
 })
 const companyModel = computed<string | undefined>({
-  get: () => listQuery.filters.value.company_id,
+  get: () => (companyId.value ? String(companyId.value) : undefined),
   set: (v) => listQuery.setParams({ company_id: v }),
 })
 const studentIdModel = computed<string>({
@@ -215,15 +239,15 @@ const deleteMutation = useMutation({
 
     <Card>
       <CardContent class="flex flex-wrap items-end gap-3">
-        <div class="space-y-1.5">
+        <div v-if="isAdmin" class="space-y-1.5">
           <Label for="school-id">School ID</Label>
           <Input id="school-id" v-model="schoolIdModel" type="number" placeholder="e.g. 1" class="w-32" />
         </div>
         <div class="space-y-1.5">
           <Label for="department">Department</Label>
-          <Select v-model="departmentModel">
+          <Select v-model="departmentModel" :disabled="departmentsQuery.isFetching.value">
             <SelectTrigger id="department" class="w-56">
-              <SelectValue placeholder="Select department" />
+              <SelectValue :placeholder="departmentsQuery.isFetching.value ? 'Loading…' : 'Select department'" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="d in departments" :key="d.id" :value="String(d.id)">{{ d.name }}</SelectItem>
@@ -232,9 +256,9 @@ const deleteMutation = useMutation({
         </div>
         <div class="space-y-1.5">
           <Label for="company">Company</Label>
-          <Select v-model="companyModel" :disabled="!departmentId">
+          <Select v-model="companyModel" :disabled="!departmentId || companiesQuery.isFetching.value">
             <SelectTrigger id="company" class="w-56">
-              <SelectValue placeholder="Select company" />
+              <SelectValue :placeholder="companiesQuery.isFetching.value ? 'Loading…' : 'Select company'" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="c in companies" :key="c.id" :value="String(c.id)">{{ c.name }}</SelectItem>

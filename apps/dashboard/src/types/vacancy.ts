@@ -36,6 +36,11 @@ export type ApplianceStatus = 'pending' | 'processed' | 'accepted' | 'rejected' 
 export interface Appliance {
   id: number
   user_id: string
+  // Only populated by GET /vacancies/:id/appliances (its join against
+  // users) — absent (omitempty backend-side) from every other endpoint that
+  // returns an Appliance.
+  user_name?: string
+  user_nis?: string | null
   vacancy_id: number
   status: ApplianceStatus
   message: string | null

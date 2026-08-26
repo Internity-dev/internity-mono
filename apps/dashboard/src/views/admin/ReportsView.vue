@@ -71,9 +71,17 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 const auth = useAuthStore()
+const isAdmin = computed(() => auth.user?.role === 'admin')
 
+// A coordinator's school picker has zero effect: it only feeds the
+// /departments picker call below, and that endpoint pins a non-admin to
+// their own school regardless of what school_id is requested (see
+// orgs/service.go's scopedSchoolFilter). So, like DepartmentsView/
+// CompaniesView, it's hidden for them entirely and schoolId is pinned to
+// their own school.
 const schoolIdInput = ref<string>(auth.user?.school_id ? String(auth.user.school_id) : '')
 const schoolId = computed(() => {
+  if (!isAdmin.value) return auth.user?.school_id
   const n = Number(schoolIdInput.value)
   return schoolIdInput.value !== '' && Number.isFinite(n) && n > 0 ? n : undefined
 })
@@ -163,7 +171,7 @@ async function downloadPresence() {
   <div class="space-y-6">
     <PageHeader title="Reports" description="Export data to Excel for offline use or record-keeping." />
 
-    <Card>
+    <Card v-if="isAdmin">
       <CardContent class="flex flex-wrap items-end gap-3">
         <div class="space-y-1.5">
           <Label for="school-id">School ID</Label>

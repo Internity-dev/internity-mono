@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { toast } from 'vue-sonner'
 import { http } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useListQuery, type FetcherParams } from '@/composables/useListQuery'
+import { useLastOrgScope } from '@/composables/useLastOrgScope'
 import type { ApiSuccess } from '@/types/api'
 import type { Appliance } from '@/types/vacancy'
 import type { Vacancy } from '@/types/vacancy'
@@ -52,9 +53,19 @@ const route = useRoute()
 // department_id/company_id/vacancy_id are all read straight from the route
 // query so the cascading pickers below can exist before `list` (which owns
 // the setParams calls that actually write them) is declared.
-const departmentId = computed(() => (route.query.department_id ? Number(route.query.department_id) : undefined))
-const urlCompanyId = computed(() => (route.query.company_id ? Number(route.query.company_id) : undefined))
+const lastScope = useLastOrgScope()
+const departmentId = computed(() => lastScope.departmentDefault(route.query.department_id ? Number(route.query.department_id) : undefined))
+const urlCompanyId = computed(() => lastScope.companyDefault(route.query.company_id ? Number(route.query.company_id) : undefined, departmentId.value))
 const vacancyId = computed(() => (route.query.vacancy_id ? Number(route.query.vacancy_id) : undefined))
+
+// Remembers whatever the staff picker lands on (explicit pick or a
+// remembered default resolved above) so the next cascading page defaults to
+// the same department/company — mentors never see this picker, so their
+// company (always their own, never chosen) shouldn't overwrite it. Vacancy
+// isn't part of the shared memory (it's specific to this one page).
+watch([departmentId, urlCompanyId], ([d, c]) => {
+  if (!isMentor.value) lastScope.remember(d, c)
+})
 
 const departmentsQuery = useQuery({
   queryKey: ['org-departments-picker'],
@@ -207,8 +218,10 @@ const rejectMutation = useMutation({
         </div>
         <div v-if="!isMentor" class="w-56 space-y-1.5">
           <label class="text-sm font-medium">Company</label>
-          <Select v-model="companyModel" :disabled="!departmentId">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Select company" /></SelectTrigger>
+          <Select v-model="companyModel" :disabled="!departmentId || companiesQuery.isFetching.value">
+            <SelectTrigger class="w-full">
+              <SelectValue :placeholder="companiesQuery.isFetching.value ? 'Loading…' : 'Select company'" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="c in companiesQuery.data.value ?? []" :key="c.id" :value="String(c.id)">
                 {{ c.name }}
@@ -218,8 +231,10 @@ const rejectMutation = useMutation({
         </div>
         <div class="w-64 space-y-1.5">
           <label class="text-sm font-medium">Vacancy</label>
-          <Select v-model="vacancyModel" :disabled="!effectiveCompanyId">
-            <SelectTrigger class="w-full"><SelectValue placeholder="Select vacancy" /></SelectTrigger>
+          <Select v-model="vacancyModel" :disabled="!effectiveCompanyId || vacanciesQuery.isFetching.value">
+            <SelectTrigger class="w-full">
+              <SelectValue :placeholder="vacanciesQuery.isFetching.value ? 'Loading…' : 'Select vacancy'" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="v in vacanciesQuery.data.value ?? []" :key="v.id" :value="String(v.id)">
                 {{ v.name }}
@@ -244,7 +259,10 @@ const rejectMutation = useMutation({
         @sort="onSort"
       >
         <template #cell-applicant="{ row }">
-          <span class="font-mono text-xs" :title="row.user_id">{{ shortId(row.user_id) }}</span>
+          <div class="flex flex-col">
+            <span class="font-medium text-foreground">{{ row.user_name || 'Unknown student' }}</span>
+            <span class="font-mono text-xs text-muted-foreground" :title="row.user_id">{{ row.user_nis || shortId(row.user_id) }}</span>
+          </div>
         </template>
         <template #cell-status="{ row }">
           <StatusBadge v-bind="applianceStatus(row.status)" />
